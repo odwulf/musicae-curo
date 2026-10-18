@@ -32,24 +32,25 @@ def mock_session():
     return s
 
 
-def test_categorize_dynamic_daily_mixes_count_8(mock_session):
-    """Verify that dynamic count of Daily Mixes (e.g. 8 mixes + discovery) are properly discovered."""
+@pytest.mark.parametrize("mix_count", [1, 3, 8, 12])
+def test_categorize_dynamic_daily_mixes_arbitrary_counts(mock_session, mix_count):
+    """Verify that any arbitrary count of Daily Mixes (1, 3, 8, 12, etc.) is discovered."""
     discovery_mix = make_mock_mix("mix-disc", "My Daily Discovery", MixType.discovery, [])
 
-    # Create 8 daily mixes
     daily_mixes = [
         make_mock_mix(f"mix-daily-{i}", f"Daily Mix {i}", MixType.daily, [])
-        for i in range(1, 9)
+        for i in range(1, mix_count + 1)
     ]
 
-    all_mixes = [discovery_mix] + daily_mixes
+    # Include a video daily mix that should be ignored
+    video_mix = make_mock_mix("mix-vid", "Daily Video Mix 1", getattr(MixType, "video_daily", MixType.daily), [])
+    video_mix.title = "Daily Video Mix 1"
 
-    # Mock session.mixes() returning these
+    all_mixes = [discovery_mix, video_mix] + daily_mixes
+
     cat = MagicMock()
     cat.items = all_mixes
-    mock_page = MagicMock()
-    mock_page.categories = [cat]
-    mock_session.mixes.return_value = mock_page
+    mock_session.mixes.return_value = MagicMock(categories=[cat])
     mock_session.user.favorites.mixes.return_value = []
     mock_session.home.return_value = None
 
@@ -57,8 +58,8 @@ def test_categorize_dynamic_daily_mixes_count_8(mock_session):
     disc, dailies = svc.get_categorized_daily_mixes()
 
     assert disc == discovery_mix
-    assert len(dailies) == 8
-    assert [m.title for m in dailies] == [f"Daily Mix {i}" for i in range(1, 9)]
+    assert len(dailies) == mix_count
+    assert [m.title for m in dailies] == [f"Daily Mix {i}" for i in range(1, mix_count + 1)]
 
 
 def test_megamix_deduplication_and_shuffle(mock_session):

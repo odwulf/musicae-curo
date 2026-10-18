@@ -91,9 +91,10 @@ class MixService:
     def get_categorized_daily_mixes(self) -> Tuple[Optional[Mix], List[Mix]]:
         """Categorize discovered mixes into (discovery_mix, list_of_daily_mixes).
 
-        Finds:
-        - discovery_mix: 'My Daily Discovery' / DISCOVERY_MIX
-        - daily_mixes: Dynamic number of 'Daily Mix 1..N' / DAILY_MIX
+        NOTE: The count of daily mixes is completely unconstrained and dynamic.
+        Tidal generates varying numbers of daily mixes for each user based on
+        listening breadth and history (e.g. 1 to 8+ mixes). This function assumes
+        no upper or lower limit and captures ALL valid audio daily mixes present.
         """
         all_mixes = self.discover_all_mixes()
         discovery_mix: Optional[Mix] = None
@@ -104,18 +105,29 @@ class MixService:
             m_title = getattr(m, "title", "") or ""
             title_lower = m_title.lower()
 
+            # Skip video mixes
+            if m_type == getattr(MixType, "video_daily", None) or "video" in title_lower:
+                continue
+
             # Identify My Daily Discovery
             if m_type == MixType.discovery or "discovery" in title_lower:
                 if not discovery_mix:
                     discovery_mix = m
                 continue
 
-            # Identify Daily Mixes (Daily Mix 1, Daily Mix 2, ..., Daily Mix 8, etc.)
-            if m_type == MixType.daily or "daily mix" in title_lower or "daily" in title_lower:
+            # Identify any Daily Mix (e.g. Daily Mix 1, Daily Mix 2, ... Daily Mix N)
+            # Dynamic matching: captures all daily mix instances without any count limits
+            if m_type == MixType.daily or "daily mix" in title_lower:
                 daily_mixes.append(m)
 
-        # Sort daily mixes logically by title
-        daily_mixes.sort(key=lambda x: getattr(x, "title", ""))
+        # Sort daily mixes naturally by title (e.g. Daily Mix 1, Daily Mix 2, ... Daily Mix 10)
+        import re
+
+        def _natural_key(m: Mix):
+            t = getattr(m, "title", "") or ""
+            return [int(chunk) if chunk.isdigit() else chunk.lower() for chunk in re.split(r"(\d+)", t)]
+
+        daily_mixes.sort(key=_natural_key)
 
         return discovery_mix, daily_mixes
 

@@ -1,18 +1,21 @@
 # Tidal CLI
 
-A schedulable command-line interface for TIDAL, tailored for automated Linux `cron` jobs and interactive playlist management.
+A schedulable command-line interface for TIDAL, tailored for automated Linux `cron` jobs, unconstrained dynamic mix discovery, and interactive playlist management.
 
-## Features
-- **OAuth2 Device Login**: Easy authorization on headless servers via Tidal device code.
-- **Local File Session Storage**: Stores credentials in `~/.config/tidal-cli/session.json` with strict `0600` permissions.
-- **Automatic Token Refresh**: Transparently refreshes expired tokens in unattended cron executions.
-- **Playlist Management**: List, inspect, export, and create playlists.
-- **Automated Daily Discovery & Megamix**:
-  - Dynamically extracts tracks from *My Daily Discovery* and any number of *Daily Mixes* (handles dynamic counts from 1 to 8+ mixes).
-  - Deduplicates tracks across all daily mixes.
-  - Creates dated snapshots (`Discovery Backup - YYYY-MM-DD`).
+📖 **[Full Documentation & Architecture Guide](DOCUMENTATION.md)**
+
+## Key Features
+- **Dynamic Mix Discovery (Zero Assumptions)**: Automatically queries Tidal and discovers **any arbitrary count** of Daily Mixes (whether an account has 1, 3, 8, 12, or more) plus *My Daily Discovery*.
+- **Automated Daily Megamix & Archiving**:
+  - Deduplicates tracks across all discovered mixes using both Track IDs and ISRCs.
+  - Generates dated snapshots (`Discovery Backup - YYYY-MM-DD`).
   - Shuffles and aggregates into a single randomized `Daily Megamix` playlist.
-- **Declarative Job Engine**: Define recurring cron tasks in `jobs.yaml`.
+- **Headless Linux Server & Cron Optimization**:
+  - Device code authorization flow (`tidal-cli auth login`) for browserless servers.
+  - Strict POSIX security permissions (`0600` for `session.json`, `0700` for config directory).
+  - Silent token refresh transparently prevents expired authentication during unattended runs.
+- **Declarative Job Engine**: Define recurring cron tasks in `jobs.yaml` with built-in `job cron-help` syntax generator.
+- **Playlist Management & Export**: List, inspect, create, and export playlists (`json`, `m3u8`, `csv`).
 
 ## Installation
 
@@ -22,25 +25,39 @@ uv sync
 
 ## Quick Start
 
-### 1. Authenticate
+### 1. Authenticate Once
 ```bash
 uv run tidal-cli auth login
 ```
-Follow the URL provided to authorize the device in your browser.
-
-Check your session:
+Visit the link provided in your browser or phone to approve the device. Check status with:
 ```bash
 uv run tidal-cli auth status
 ```
 
-### 2. Manual Megamix Execution
+### 2. Discover Your Dynamic Mixes
+```bash
+uv run tidal-cli mix list
+```
+
+### 3. Generate Megamix Manually
 ```bash
 uv run tidal-cli mix megamix
 ```
 
-### 3. Schedulable Cron Execution
-To see ready-to-paste crontab syntax:
+### 4. Setup Linux Server Cron Job
+Get the exact crontab line for your server:
 ```bash
 uv run tidal-cli job cron-help
 ```
+Add it to your crontab:
+```bash
+crontab -e
+```
 
+## Running Tests
+
+```bash
+uv run pytest -v
+```
+
+See [DOCUMENTATION.md](DOCUMENTATION.md) for detailed CLI commands, cron configuration, and extension guides.
