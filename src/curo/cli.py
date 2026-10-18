@@ -16,6 +16,7 @@ from curo.config import ConfigManager, EmailConfig, config_manager
 from curo.core.provider import MusicProvider
 from curo.core.registry import ProviderRegistry
 import curo.providers  # Ensure all provider adapters are registered
+from curo.providers.base import ProviderStub
 from curo.services.album_service import AlbumService
 from curo.services.email_service import EmailService
 from curo.services.job_runner import JobExecutionError, JobRunner
@@ -74,10 +75,19 @@ state: Dict[str, Any] = {
 }
 
 
-def get_active_provider(provider_override: Optional[str] = None) -> MusicProvider:
+def get_active_provider(
+    provider_override: Optional[str] = None, require_active: bool = False
+) -> MusicProvider:
     """Resolve and return active MusicProvider adapter."""
     p_name = provider_override or state.get("provider_name") or state["config"].get_default_provider()
-    return ProviderRegistry.create_provider(p_name, cfg=state["config"])
+    p = ProviderRegistry.create_provider(p_name, cfg=state["config"])
+    if require_active and isinstance(p, ProviderStub):
+        err_console.print(
+            f"[bold yellow]Provider '{p.display_name}' is scaffolded and not yet implemented.[/bold yellow]\n"
+            f"[dim]Tidal is currently the only active provider. Run 'curo provider list' to view available providers.[/dim]"
+        )
+        raise typer.Exit(1)
+    return p
 
 
 @app.callback()
@@ -162,6 +172,19 @@ def auth_login(
 ) -> None:
     """Log in to a streaming provider."""
     p = get_active_provider(provider)
+    if isinstance(p, ProviderStub):
+        console.print(
+            Panel(
+                f"[bold yellow]{p.display_name} adapter is scaffolded, but not yet implemented.[/bold yellow]\n\n"
+                f"[dim]Musicae Curo currently supports [bold]Tidal[/bold] as the active provider.\n"
+                f"Support for {p.display_name} is planned. Contributions are welcome!\n"
+                f"Run [bold]curo provider list[/bold] to check provider statuses.[/dim]",
+                title=f"{p.display_name} Provider",
+                border_style="yellow",
+            )
+        )
+        raise typer.Exit(1)
+
     try:
         p.login()
     except Exception as e:
@@ -175,6 +198,9 @@ def auth_logout(
 ) -> None:
     """Log out and remove stored session credentials."""
     p = get_active_provider(provider)
+    if isinstance(p, ProviderStub):
+        console.print(f"[dim]{p.display_name} is a scaffolded stub; no stored session exists.[/dim]")
+        return
     p.logout()
     console.print(f"[bold yellow]Logged out of {p.display_name}.[/bold yellow]")
 
@@ -185,9 +211,23 @@ def auth_status(
 ) -> None:
     """Check session authentication status."""
     p = get_active_provider(provider)
+    if isinstance(p, ProviderStub):
+        if state["json_mode"]:
+            console.print_json(data=p.get_session_info())
+            return
+        console.print(
+            Panel(
+                f"[bold yellow]{p.display_name} is scaffolded (stub) and not yet implemented.[/bold yellow]\n\n"
+                f"[dim]Tidal is currently the active provider. Run [bold]curo provider list[/bold] for status.[/dim]",
+                title=f"{p.display_name} Auth Status",
+                border_style="yellow",
+            )
+        )
+        return
+
     info = p.get_session_info()
     if state["json_mode"]:
-        console.print(json.dumps(info, indent=2))
+        console.print_json(data=info)
         return
 
     if info.get("logged_in"):
@@ -205,7 +245,7 @@ def playlist_list(
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider")
 ) -> None:
     """List all user playlists."""
-    p = get_active_provider(provider)
+    p = get_active_provider(provider, require_active=True)
     svc = PlaylistService(p)
     playlists = svc.list_playlists()
 
@@ -230,7 +270,7 @@ def playlist_show(
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
 ) -> None:
     """Inspect tracks in a playlist."""
-    p = get_active_provider(provider)
+    p = get_active_provider(provider, require_active=True)
     svc = PlaylistService(p)
     try:
         pl = svc.get_playlist(identifier)
@@ -278,7 +318,7 @@ def playlist_create(
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
 ) -> None:
     """Create a new playlist."""
-    p = get_active_provider(provider)
+    p = get_active_provider(provider, require_active=True)
     svc = PlaylistService(p)
     res = svc.create_playlist(title=title, description=desc, public=public)
     pl_id = getattr(res, "id", "")
@@ -296,7 +336,7 @@ def playlist_export(
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
 ) -> None:
     """Export playlist metadata to JSON, M3U8, or CSV."""
-    p = get_active_provider(provider)
+    p = get_active_provider(provider, require_active=True)
     svc = PlaylistService(p)
     try:
         content = svc.export_playlist(identifier, export_format=format)
@@ -322,7 +362,7 @@ def playlist_snapshot(
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
 ) -> None:
     """Save versioned SHA-256 snapshot of personal playlists."""
-    p = get_active_provider(provider)
+    p = get_active_provider(provider, require_active=True)
     snap_svc = SnapshotService(p, cfg=state["config"])
     notif_info = None
 
@@ -422,7 +462,7 @@ def playlist_repair(
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
 ) -> None:
     """Analyze unavailable tracks in a playlist, score replacements, and optionally repair."""
-    p = get_active_provider(provider)
+    p = get_active_provider(provider, require_active=True)
     repair_svc = PlaylistRepairService(p, cfg=state["config"])
 
     try:
@@ -521,7 +561,7 @@ def playlist_replace(
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
 ) -> None:
     """Manually replace a specific track in a playlist by track ID, position, ISRC, or UPC."""
-    p = get_active_provider(provider)
+    p = get_active_provider(provider, require_active=True)
     repair_svc = PlaylistRepairService(p, cfg=state["config"])
 
     try:
@@ -567,7 +607,7 @@ def album_show(
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
 ) -> None:
     """Inspect album details and tracklist."""
-    p = get_active_provider(provider)
+    p = get_active_provider(provider, require_active=True)
     svc = AlbumService(p)
     try:
         alb = svc.get_album(identifier)
@@ -611,7 +651,7 @@ def mix_list(
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider")
 ) -> None:
     """List personalized discovery mixes."""
-    p = get_active_provider(provider)
+    p = get_active_provider(provider, require_active=True)
     svc = MixService(p)
     mixes = svc.discover_all_mixes()
 
@@ -642,7 +682,7 @@ def mix_daily(
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
 ) -> None:
     """Archive today's Daily Discovery mix into a permanent dated playlist."""
-    p = get_active_provider(provider)
+    p = get_active_provider(provider, require_active=True)
     svc = MixService(p)
     res = svc.backup_daily_discovery(playlist_name_format=format)
     if state["json_mode"]:
@@ -661,7 +701,7 @@ def mix_megamix(
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
 ) -> None:
     """Synthesize all daily discovery mixes into a consolidated Megamix."""
-    p = get_active_provider(provider)
+    p = get_active_provider(provider, require_active=True)
     svc = MixService(p)
     res = svc.create_megamix(target_playlist=target, mode=mode, shuffle=not no_shuffle)
     if state["json_mode"]:
@@ -747,7 +787,7 @@ def notify_send(
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
 ) -> None:
     """Trigger email notification dispatch manually."""
-    p = get_active_provider(provider)
+    p = get_active_provider(provider, require_active=True)
     snap_svc = SnapshotService(p, cfg=state["config"])
     email_svc = EmailService(cfg=state["config"])
 
@@ -755,7 +795,7 @@ def notify_send(
     res = email_svc.send_digest_notification(batch, force_all=all, provider_name=p.display_name)
 
     if state["json_mode"]:
-        console.print(json.dumps(res, indent=2))
+        console.print_json(data=res)
         return
 
     if res.get("sent"):
@@ -793,7 +833,7 @@ def job_run(
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
 ) -> None:
     """Execute an automated job action pipeline."""
-    p = get_active_provider(provider)
+    p = get_active_provider(provider, require_active=True)
     runner = JobRunner(provider=p, cfg=state["config"])
     try:
         res = runner.run_job(job_name)

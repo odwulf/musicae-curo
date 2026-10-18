@@ -72,6 +72,19 @@ Adapters self-register into `ProviderRegistry`. At runtime, the active provider 
 2. Local configuration default: `curo provider default <name>`.
 3. Default fallback: `"tidal"`.
 
+### Provider Implementation Status
+
+| Provider | Identifier (`-p`) | Status | Implementation Details |
+| :--- | :--- | :--- | :--- |
+| **Tidal** | `tidal` | **Active (Fully Implemented)** | Device code OAuth, playlists, mixes, search, and live repair via `tidalapi`. |
+| **Spotify** | `spotify` | **Planned (Scaffolded Stub)** | Interface defined in `curo.providers.spotify`; requires `spotipy` client integration. |
+| **Deezer** | `deezer` | **Planned (Scaffolded Stub)** | Interface defined in `curo.providers.deezer`; ready for community implementation. |
+| **Qobuz** | `qobuz` | **Planned (Scaffolded Stub)** | Interface defined in `curo.providers.qobuz`; ready for community implementation. |
+| **YouTube Music** | `ytmusic` / `youtube_music` | **Planned (Scaffolded Stub)** | Interface defined in `curo.providers.ytmusic`; ready for community implementation. |
+
+> [!IMPORTANT]
+> **Tidal is currently the only active, fully operational provider.** The other providers (Spotify, Deezer, Qobuz, YouTube Music) are scaffolded architectural stubs ready for future integration. Attempting to run library or playback operations against them will clearly inform you that the adapter is not yet implemented.
+
 ---
 
 ## 2. Directory Structure & File Permissions
