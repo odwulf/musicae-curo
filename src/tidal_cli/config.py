@@ -28,6 +28,13 @@ jobs:
           shuffle: true
           mode: "replace" # 'replace' wipes previous megamix content; 'append' adds to it
           description: "All daily mix tunes in random order - updated on {date}"
+
+  daily-playlist-backup:
+    description: "Daily versioned snapshot of all personal playlists with availability alerts"
+    actions:
+      - action: snapshot_all_playlists
+        params:
+          alert_on_unavailable: true
 """
 
 
@@ -52,10 +59,16 @@ class ConfigManager:
         self.session_file = self.config_dir / "session.json"
         self.jobs_file = self.config_dir / "jobs.yaml"
         self.log_file = self.config_dir / "tidal-cli.log"
+        self.snapshots_dir = self.config_dir / "snapshots"
+        self.track_registry_file = self.snapshots_dir / "index.json"
+        self.logs_dir = self.config_dir / "logs"
+        self.alerts_log_file = self.logs_dir / "availability_alerts.log"
 
     def ensure_config_dir(self) -> Path:
         """Create config directory with strict permissions on POSIX systems."""
         self.config_dir.mkdir(parents=True, exist_ok=True)
+        self.snapshots_dir.mkdir(parents=True, exist_ok=True)
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
         if sys.platform != "win32":
             try:
                 os.chmod(self.config_dir, 0o700)

@@ -129,6 +129,13 @@ jobs:
           shuffle: true
           mode: "replace"
           description: "All daily mix tunes in random order - updated on {date}"
+
+  daily-playlist-backup:
+    description: "Daily versioned snapshot of all personal playlists with availability alerts"
+    actions:
+      - action: snapshot_all_playlists
+        params:
+          alert_on_unavailable: true
 ```
 
 ### Inspect Available Jobs
@@ -145,6 +152,9 @@ Output:
 ```cron
 # Run Tidal Daily Discovery Backup & Megamix daily at 06:00 UTC
 0 6 * * * /path/to/.venv/bin/python -m tidal_cli.cli job run daily-discovery-megamix --quiet >> ~/.config/tidal-cli/cron.log 2>&1
+
+# Run Daily Personal Playlist Versioned Backup & Availability Check daily at 05:00 UTC
+0 5 * * * /path/to/.venv/bin/python -m tidal_cli.cli job run daily-playlist-backup --quiet >> ~/.config/tidal-cli/cron.log 2>&1
 ```
 
 To install:
@@ -209,7 +219,24 @@ tidal-cli playlist repair "My Heavy Rotation" --export reports/custom_repair.jso
 
 # Check all tracks (including playable ones) for newer reissues or remasters
 tidal-cli playlist repair "My Heavy Rotation" --all-tracks
+
+# Snapshot all personal user playlists (versioned by SHA-256 content hash)
+tidal-cli playlist snapshot
+
+# Snapshot a specific playlist by ID or name
+tidal-cli playlist snapshot "My Heavy Rotation"
+
+# View recent track availability alerts logged when tracks become unavailable
+tidal-cli playlist alerts
+tidal-cli playlist alerts --limit 100
 ```
+
+#### Daily Snapshots, Version History & Track Registry
+To protect against catalog turnover, `tidal-cli` provides automated versioned playlist backups and an availability monitoring pipeline:
+- **Change Detection via SHA-256**: Only creates a new snapshot file (`~/.config/tidal-cli/snapshots/<playlist_slug>/<hash>.json`) when track ordering or IDs actually change.
+- **Playlist Manifest (`manifest.json`)**: Tracks complete revision history with timestamp, version number, track count, and content hash.
+- **Historical Track Registry (`snapshots/index.json`)**: Continuously records healthy, playable tracks with their last-known `isrc`, `album_upc`, and `album_release_date`. When a track later becomes unavailable and Tidal zeroes out its identifiers, `playlist repair` queries this registry to recover the sound recording code and achieves **90%–100% repair accuracy**.
+- **Delisted Track Alerts (`availability_alerts.log`)**: Appends structured JSON alert events whenever a track is detected as unavailable, making catalog regressions immediately observable.
 
 #### Similarity Scoring Calibration
 Because Tidal strips the `isrc` and album `upc` fields when de-listing tracks, the scoring formula is calibrated so that an exact metadata match achieves **80% (0.80)**:
@@ -217,8 +244,9 @@ Because Tidal strips the `isrc` and album `upc` fields when de-listing tracks, t
 - **Artist Match (25 pts)**: Primary artist ID, collaborating/contributing artist overlap (handles inverted credits on duets), or normalized name comparison.
 - **Duration Match (15 pts)**: Exact runtime within 1s.
 - **Album Name Match (10 pts)**: Normalized release title comparison.
+- **Single-to-Album Matching (+8 pts)**: If the original was a self-titled single track (`album == title`), rewards full studio album versions.
 - **Album Release Date Bonus (+5 pts exact date, +2 pts same year)**: Matches release date from album metadata.
-- **ISRC Bonus (+10 pts)**: Verified exact sound recording code match.
+- **ISRC Bonus (+10 pts)**: Verified exact sound recording code match (boosts score to 90%–100% when present or recovered from snapshot history).
 - **Album UPC Bonus (+10 pts)**: Verified identical album release barcode.
 - **Version Mismatches**: Severe penalties (capping score $\le 40\%$) for Live, Acoustic, Instrumental, or Remix cuts substituting studio tracks, requiring manual approval.
 

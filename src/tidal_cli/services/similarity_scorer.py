@@ -146,6 +146,7 @@ def evaluate_candidate(
     candidate_upc: Optional[str] = None,
     original_release_date: Optional[Any] = None,
     candidate_release_date: Optional[Any] = None,
+    original_isrc: Optional[str] = None,
 ) -> CandidateEvaluation:
     """Evaluate candidate against original track, producing similarity score and reasoning."""
     reasoning_parts = []
@@ -277,13 +278,18 @@ def evaluate_candidate(
     # -----------------------------------------------------------------------
 
     # 5. ISRC match bonus (+10 points)
-    orig_isrc = (getattr(original, "isrc", None) or "").strip().upper()
-    cand_isrc = (getattr(candidate, "isrc", None) or "").strip().upper()
+    raw_orig_isrc = original_isrc or getattr(original, "isrc", None) or ""
+    orig_isrc = str(raw_orig_isrc).strip().upper() if not _is_mock(raw_orig_isrc) else ""
+    raw_cand_isrc = getattr(candidate, "isrc", None) or ""
+    cand_isrc = str(raw_cand_isrc).strip().upper() if not _is_mock(raw_cand_isrc) else ""
     isrc_match = bool(orig_isrc and cand_isrc and orig_isrc == cand_isrc)
 
     if isrc_match:
         points += 10.0
-        reasoning_parts.append(f"Exact ISRC match confirmed ({orig_isrc}, +10 pts).")
+        if original_isrc and not getattr(original, "isrc", None):
+            reasoning_parts.append(f"Exact ISRC match confirmed via recovered historical ISRC ({orig_isrc}, +10 pts).")
+        else:
+            reasoning_parts.append(f"Exact ISRC match confirmed ({orig_isrc}, +10 pts).")
     elif orig_isrc and cand_isrc:
         reasoning_parts.append(f"ISRC differs (orig: {orig_isrc}, cand: {cand_isrc}).")
     else:

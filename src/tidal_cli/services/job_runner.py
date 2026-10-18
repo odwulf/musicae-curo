@@ -12,6 +12,7 @@ from tidal_cli.auth import SessionManager
 from tidal_cli.config import ConfigManager, config_manager
 from tidal_cli.services.mix_service import MixService
 from tidal_cli.services.playlist_service import PlaylistService
+from tidal_cli.services.snapshot_service import SnapshotService
 
 logger = logging.getLogger("tidal_cli.job_runner")
 
@@ -62,6 +63,7 @@ class JobRunner:
         session = self.session_manager.load_session(auto_refresh=True)
         playlist_service = PlaylistService(session)
         mix_service = MixService(session)
+        snapshot_service = SnapshotService(session, cfg=self.config)
 
         action_results: List[Dict[str, Any]] = []
 
@@ -94,6 +96,15 @@ class JobRunner:
                             export_format=params.get("format", "json"),
                         )
                     }
+                elif action_type == "snapshot_all_playlists":
+                    res = snapshot_service.snapshot_all_playlists(
+                        alert_on_unavailable=params.get("alert_on_unavailable", True)
+                    )
+                elif action_type == "snapshot_playlist":
+                    res = snapshot_service.snapshot_playlist(
+                        identifier=params["playlist"],
+                        alert_on_unavailable=params.get("alert_on_unavailable", True),
+                    )
                 else:
                     raise JobExecutionError(f"Unknown action type: {action_type}")
 

@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 import tidalapi
 from tidalapi.playlist import UserPlaylist
 
+from tidal_cli.config import ConfigManager, config_manager
 from tidal_cli.services.candidate_finder import CandidateFinder
 from tidal_cli.services.playlist_service import PlaylistService
 from tidal_cli.services.track_matcher import is_track_available
@@ -28,10 +29,18 @@ def _slugify(text: str) -> str:
 class PlaylistRepairService:
     """Inspects playlists for retired/unavailable tracks, finds replacements, and generates reports."""
 
-    def __init__(self, session: tidalapi.Session, project_root: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        session: tidalapi.Session,
+        project_root: Optional[Path] = None,
+        cfg: Optional[ConfigManager] = None,
+    ) -> None:
         self.session = session
+        self.config = cfg or config_manager
         self.playlist_service = PlaylistService(session)
-        self.candidate_finder = CandidateFinder(session)
+        from tidal_cli.services.snapshot_service import SnapshotService
+        self.snapshot_service = SnapshotService(session, cfg=self.config)
+        self.candidate_finder = CandidateFinder(session, snapshot_service=self.snapshot_service)
         self.project_root = project_root or Path.cwd()
 
     def analyze_and_repair(
@@ -70,6 +79,22 @@ class PlaylistRepairService:
                 else (str(raw_orig_date) if raw_orig_date and not hasattr(raw_orig_date, "_mock_return_value") else None)
             )
 
+            # Check if any missing metadata can be recovered from historical snapshots
+            hist = None
+            if self.snapshot_service and getattr(t, "id", None) is not None:
+                try:
+                    hist = self.snapshot_service.get_historical_track(t.id)
+                except Exception:
+                    hist = None
+
+            orig_isrc = getattr(t, "isrc", None) or (hist.get("isrc") if hist else None)
+            recovered_isrc = bool(not getattr(t, "isrc", None) and hist and hist.get("isrc"))
+            recovered_upc = bool(not orig_upc and hist and hist.get("album_upc"))
+            if recovered_upc:
+                orig_upc = hist.get("album_upc")
+            if not orig_release_date and hist and hist.get("album_release_date"):
+                orig_release_date = hist.get("album_release_date")
+
             # Find candidates
             candidates = self.candidate_finder.find_candidates(t, max_candidates=10)
 
@@ -94,8 +119,10 @@ class PlaylistRepairService:
                     "album": orig_album,
                     "album_release_date": orig_release_date,
                     "duration_seconds": getattr(t, "duration", None),
-                    "isrc": getattr(t, "isrc", None),
+                    "isrc": orig_isrc,
+                    "recovered_isrc": recovered_isrc,
                     "album_upc": orig_upc,
+                    "recovered_album_upc": recovered_upc,
                     "available": available,
                 },
                 "candidate_count": len(candidates),

@@ -17,8 +17,9 @@ logger = logging.getLogger(__name__)
 class CandidateFinder:
     """Discovers active candidate replacements for unavailable tracks using a tiered strategy."""
 
-    def __init__(self, session: tidalapi.Session) -> None:
+    def __init__(self, session: tidalapi.Session, snapshot_service: Optional[Any] = None) -> None:
         self.session = session
+        self.snapshot_service = snapshot_service
 
     def find_candidates(self, original_track: Track, max_candidates: int = 10) -> List[CandidateEvaluation]:
         """Find and rank replacement candidates for an unavailable track."""
@@ -27,6 +28,23 @@ class CandidateFinder:
         orig_title = getattr(original_track, "name", "") or ""
         orig_artist = getattr(getattr(original_track, "artist", None), "name", "") or ""
         orig_upc = getattr(getattr(original_track, "album", None), "upc", None)
+        orig_release_date = getattr(getattr(original_track, "album", None), "release_date", None)
+
+        # Recover historical ISRC, UPC, or release date from snapshot registry if missing
+        if self.snapshot_service and orig_id is not None:
+            try:
+                hist = self.snapshot_service.get_historical_track(orig_id)
+                if hist:
+                    if not orig_isrc and hist.get("isrc"):
+                        orig_isrc = hist.get("isrc")
+                        logger.info(f"Recovered historical ISRC '{orig_isrc}' for track #{orig_id}")
+                    if not orig_upc and hist.get("album_upc"):
+                        orig_upc = hist.get("album_upc")
+                        logger.info(f"Recovered historical album UPC '{orig_upc}' for track #{orig_id}")
+                    if not orig_release_date and hist.get("album_release_date"):
+                        orig_release_date = hist.get("album_release_date")
+            except Exception as e:
+                logger.debug(f"Failed to query historical track registry for #{orig_id}: {e}")
 
         candidates_by_id: Dict[str, Track] = {}
 
@@ -82,7 +100,6 @@ class CandidateFinder:
         # -------------------------------------------------------------------
         # Evaluate & Score Candidates
         # -------------------------------------------------------------------
-        orig_release_date = getattr(getattr(original_track, "album", None), "release_date", None)
         evaluations: List[CandidateEvaluation] = []
         for cand in candidates_by_id.values():
             cand_upc = getattr(getattr(cand, "album", None), "upc", None)
@@ -94,6 +111,7 @@ class CandidateFinder:
                 candidate_upc=cand_upc,
                 original_release_date=orig_release_date,
                 candidate_release_date=cand_release_date,
+                original_isrc=orig_isrc,
             )
             evaluations.append(ev)
 
