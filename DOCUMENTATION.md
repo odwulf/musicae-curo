@@ -197,6 +197,15 @@ tidal-cli playlist create "Weekend Grooves" --desc "Hand-picked tracks" --public
 tidal-cli playlist export "Daily Megamix" --format json --output ~/megamix.json
 tidal-cli playlist export "Daily Megamix" --format m3u8 --output ~/megamix.m3u8
 tidal-cli playlist export "Daily Megamix" --format csv --output ~/megamix.csv
+
+# Detect unavailable tracks and evaluate replacement candidates (default: 100% threshold & dry-run)
+tidal-cli playlist repair "My Heavy Rotation"
+
+# Run repair analysis and export report to a custom JSON location
+tidal-cli playlist repair "My Heavy Rotation" --export reports/custom_repair.json
+
+# Check all tracks (including playable ones) for newer reissues or remasters
+tidal-cli playlist repair "My Heavy Rotation" --all-tracks
 ```
 
 ---

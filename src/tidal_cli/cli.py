@@ -264,6 +264,110 @@ def playlist_export(
         console.print(content)
 
 
+@playlist_app.command("repair")
+def playlist_repair(
+    identifier: str = typer.Argument(..., help="Playlist ID or Name to analyze"),
+    threshold: float = typer.Option(
+        1.0, "--threshold", "-t", help="Minimum similarity score (0.0 to 1.0) to replace. Default 1.0 never replaces."
+    ),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--live", help="Simulate replacements without modifying playlist on Tidal."
+    ),
+    export: Optional[Path] = typer.Option(
+        None, "--export", "-e", help="Custom path for diagnostic JSON report [default: reports/repair_<playlist>_<date>.json]"
+    ),
+    all_tracks: bool = typer.Option(
+        False, "--all-tracks", help="Inspect all tracks in playlist, not just unavailable ones."
+    ),
+) -> None:
+    """Detect unavailable tracks in playlist and evaluate replacement candidates."""
+    mgr = SessionManager(state["config"])
+    try:
+        session = mgr.load_session()
+        from tidal_cli.services.playlist_repair_service import PlaylistRepairService
+        repair_svc = PlaylistRepairService(session)
+        report = repair_svc.analyze_and_repair(
+            identifier=identifier,
+            threshold=threshold,
+            dry_run=dry_run,
+            all_tracks=all_tracks,
+            export_path=export,
+        )
+    except Exception as e:
+        err_console.print(f"[bold red]Repair analysis failed:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    if state["json_mode"]:
+        console.print_json(data=report)
+        return
+
+    unavail_count = report["unavailable_tracks_count"]
+    mode_str = "[yellow]Dry-Run (Simulation)[/yellow]" if dry_run else "[red]LIVE (Mutating)[/red]"
+    title = f"Playlist Repair: {report['playlist_name']} ({mode_str}, Threshold: {threshold*100:.0f}%)"
+
+    if unavail_count == 0:
+        console.print(
+            Panel(
+                f"[green]All {report['total_tracks']} tracks are active and playable![/green]",
+                title=title,
+                border_style="green",
+            )
+        )
+        console.print(f"[dim]Diagnostic report written to: {report['exported_to']}[/dim]")
+        return
+
+    table = Table(title=title, border_style="yellow")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Unavailable Track", style="bold red")
+    table.add_column("Artist")
+    table.add_column("Best Candidate", style="bold green")
+    table.add_column("Score", justify="right")
+    table.add_column("Action / Status")
+
+    for u in report["unavailable_tracks"]:
+        orig = u["original_track"]
+        best = u.get("best_candidate")
+        idx_str = str(u["index_in_playlist"] + 1)
+        orig_title = orig["title"]
+        orig_artist = orig["artist"]
+
+        if best:
+            cand_title = f"{best['title']} (ID: {best['id']})"
+            score_pct = f"{best['similarity_score']*100:.1f}%"
+            score_style = (
+                "bold green"
+                if best["similarity_score"] >= 0.8
+                else ("bold yellow" if best["similarity_score"] >= 0.5 else "dim red")
+            )
+            status = u["replacement_status"]
+            if best["requires_manual_approval"]:
+                status = f"[yellow]{status}[/yellow] (needs manual approval)"
+            table.add_row(
+                idx_str,
+                orig_title,
+                orig_artist,
+                cand_title,
+                f"[{score_style}]{score_pct}[/{score_style}]",
+                status,
+            )
+        else:
+            table.add_row(
+                idx_str,
+                orig_title,
+                orig_artist,
+                "[dim]No candidate found[/dim]",
+                "0.0%",
+                "[red]no_candidates[/red]",
+            )
+
+    console.print(table)
+    console.print(f"\n[bold]Full diagnostic report written to:[/bold] [cyan]{report['exported_to']}[/cyan]")
+    if dry_run and threshold >= 1.0:
+        console.print(
+            "[dim]Note: Baseline threshold is set to 100% and Dry-Run is active. No tracks were replaced.[/dim]"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Album Commands
 # ---------------------------------------------------------------------------
