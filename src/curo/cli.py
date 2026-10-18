@@ -85,7 +85,7 @@ def get_active_provider(
     if require_active and isinstance(p, ProviderStub):
         err_console.print(
             f"[bold yellow]Provider '{p.display_name}' is scaffolded and not yet implemented.[/bold yellow]\n"
-            f"[dim]Tidal is currently the only active provider. Run 'curo provider list' to view available providers.[/dim]"
+            f"[dim]Run 'curo provider list' to view available providers.[/dim]"
         )
         raise typer.Exit(1)
     return p
@@ -138,7 +138,7 @@ def provider_list() -> None:
 
     for p in providers:
         is_def = "* (default)" if p == default_p else ""
-        status = "Active" if p == "tidal" else "Scaffolded (stub)"
+        status = "Active" if p in ("tidal", "spotify") else "Scaffolded (stub)"
         table.add_row(p, is_def, status)
 
     console.print(table)
@@ -177,7 +177,7 @@ def auth_login(
         console.print(
             Panel(
                 f"[bold yellow]{p.display_name} adapter is scaffolded, but not yet implemented.[/bold yellow]\n\n"
-                f"[dim]Musicae Curo currently supports [bold]Tidal[/bold] as the active provider.\n"
+                f"[dim]Musicae Curo currently supports [bold]Tidal[/bold] and [bold]Spotify[/bold] as active providers.\n"
                 f"Support for {p.display_name} is planned. Contributions are welcome!\n"
                 f"Run [bold]curo provider list[/bold] to check provider statuses.[/dim]",
                 title=f"{p.display_name} Provider",
@@ -219,7 +219,7 @@ def auth_status(
         console.print(
             Panel(
                 f"[bold yellow]{p.display_name} is scaffolded (stub) and not yet implemented.[/bold yellow]\n\n"
-                f"[dim]Tidal is currently the active provider. Run [bold]curo provider list[/bold] for status.[/dim]",
+                f"[dim]Tidal and Spotify are currently active providers. Run [bold]curo provider list[/bold] for status.[/dim]",
                 title=f"{p.display_name} Auth Status",
                 border_style="yellow",
             )

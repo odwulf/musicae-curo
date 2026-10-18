@@ -19,7 +19,7 @@ def test_list_registered_providers():
 
 def test_instantiate_stub_providers_with_config(tmp_path):
     cfg = ConfigManager(custom_config_dir=tmp_path)
-    stub_names = ["spotify", "deezer", "qobuz", "ytmusic"]
+    stub_names = ["deezer", "qobuz", "ytmusic"]
 
     for name in stub_names:
         provider = ProviderRegistry.create_provider(name, cfg=cfg)
@@ -49,18 +49,18 @@ def test_cli_stub_provider_messages(tmp_path, monkeypatch):
 
     runner = CliRunner()
 
-    # 1. auth login on stub provider
-    res_login = runner.invoke(app, ["auth", "login", "-p", "spotify"])
+    # 1. auth login on stub provider (e.g. deezer)
+    res_login = runner.invoke(app, ["auth", "login", "-p", "deezer"])
     assert res_login.exit_code == 1
-    assert "Spotify adapter is scaffolded, but not yet implemented" in res_login.stdout
+    assert "Deezer adapter is scaffolded, but not yet implemented" in res_login.stdout
 
     # 2. auth status on stub provider
-    res_status = runner.invoke(app, ["auth", "status", "-p", "spotify"])
+    res_status = runner.invoke(app, ["auth", "status", "-p", "deezer"])
     assert res_status.exit_code == 0
-    assert "Spotify is scaffolded (stub) and not yet implemented" in res_status.stdout
+    assert "Deezer is scaffolded (stub) and not yet implemented" in res_status.stdout
 
     # 3. playlist list on stub provider
-    res_playlist = runner.invoke(app, ["playlist", "list", "-p", "spotify"])
+    res_playlist = runner.invoke(app, ["playlist", "list", "-p", "deezer"])
     assert res_playlist.exit_code == 1
-    assert "Provider 'Spotify' is scaffolded and not yet implemented" in (res_playlist.stdout + (res_playlist.stderr or ""))
+    assert "Provider 'Deezer' is scaffolded and not yet implemented" in (res_playlist.stdout + (res_playlist.stderr or ""))
 
