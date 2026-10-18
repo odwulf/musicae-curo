@@ -31,12 +31,14 @@ playlist_app = typer.Typer(name="playlist", help="Inspect, create, and export pl
 album_app = typer.Typer(name="album", help="Inspect and export albums with full metadata.")
 mix_app = typer.Typer(name="mix", help="Daily discovery archiving and randomized megamix routines.")
 job_app = typer.Typer(name="job", help="Manage and execute automated cron jobs.")
+notify_app = typer.Typer(name="notify", help="Configure and dispatch email digests and availability notifications.")
 
 app.add_typer(auth_app)
 app.add_typer(playlist_app)
 app.add_typer(album_app)
 app.add_typer(mix_app)
 app.add_typer(job_app)
+app.add_typer(notify_app)
 
 console = Console()
 err_console = Console(stderr=True)
@@ -375,9 +377,12 @@ def playlist_snapshot(
         None, help="Playlist ID or Name (leave empty or specify 'all' to snapshot all personal playlists)"
     ),
     alert: bool = typer.Option(True, "--alert/--no-alert", help="Record alerts if unavailable tracks are detected"),
+    notify: bool = typer.Option(True, "--notify/--no-notify", help="Dispatch email notification if configured and changes/alerts detected"),
+    all_mail: bool = typer.Option(False, "--all-mail", "-a", help="Send full 'All Playlists Baseline Overview' email"),
 ) -> None:
     """Create a versioned snapshot of personal playlists and record unavailable track alerts."""
     mgr = SessionManager(state["config"])
+    notif_info = None
     try:
         session = mgr.load_session()
         snapshot_svc = SnapshotService(session, cfg=state["config"])
@@ -385,14 +390,20 @@ def playlist_snapshot(
             result = snapshot_svc.snapshot_playlist(identifier, alert_on_unavailable=alert)
             snapshots = [result]
         else:
-            batch_res = snapshot_svc.snapshot_all_playlists(alert_on_unavailable=alert)
+            batch_res = snapshot_svc.snapshot_all_playlists(
+                alert_on_unavailable=alert,
+                notify=notify,
+                force_all_mail=all_mail,
+            )
             snapshots = batch_res.get("playlists", [])
+            notif_info = batch_res.get("notification")
     except Exception as e:
         err_console.print(f"[bold red]Snapshot error:[/bold red] {e}")
         raise typer.Exit(code=1)
 
     if state["json_mode"]:
-        console.print_json(data=snapshots)
+        payload = {"playlists": snapshots, "notification": notif_info} if notif_info else snapshots
+        console.print_json(data=payload)
         return
 
     table = Table(title="Playlist Snapshots & Version Tracking", border_style="cyan")
@@ -435,6 +446,10 @@ def playlist_snapshot(
             f"\n[bold yellow]Alert:[/bold yellow] Found {total_unavail} unavailable track(s) across playlists."
             f"\nRun [cyan]tidal-cli playlist alerts[/cyan] to view details or [cyan]tidal-cli playlist repair <id>[/cyan] to find replacements."
         )
+
+    if notif_info and notif_info.get("sent"):
+        tmpl = notif_info.get("template", "notification")
+        console.print(f"\n[green]✓ Email notification successfully sent:[/green] {tmpl}")
 
 
 @playlist_app.command("alerts")
@@ -701,6 +716,158 @@ def job_cron_help(
     runner = JobRunner(state["config"])
     line = runner.generate_cron_help(job_name=job_name)
     console.print(Panel(line, title="[bold]Recommended Crontab Configuration[/bold]", border_style="cyan"))
+
+
+# ---------------------------------------------------------------------------
+# Notification Commands
+# ---------------------------------------------------------------------------
+@notify_app.command("status")
+def notify_status() -> None:
+    """Display current SMTP email notification configuration and status."""
+    email_cfg = state["config"].get_email_config()
+
+    state_data = {}
+    if state["config"].notification_state_file.exists():
+        try:
+            with open(state["config"].notification_state_file, "r", encoding="utf-8") as f:
+                state_data = json.load(f) or {}
+        except Exception:
+            state_data = {}
+
+    if state["json_mode"]:
+        data = {
+            "configured": email_cfg.is_configured,
+            "config": email_cfg.model_dump(exclude={"smtp_password"}),
+            "password_set": bool(email_cfg.smtp_password),
+            "state": state_data,
+        }
+        console.print_json(data=data)
+        return
+
+    table = Table(title="Email Notification Status", border_style="cyan")
+    table.add_column("Setting", style="bold")
+    table.add_column("Value")
+
+    table.add_row(
+        "Configured",
+        "[green]Yes[/green]" if email_cfg.is_configured else "[yellow]No (smtp_host or to_address missing)[/yellow]",
+    )
+    table.add_row("SMTP Host", email_cfg.smtp_host or "[dim]Not set[/dim]")
+    table.add_row("SMTP Port", str(email_cfg.smtp_port))
+    table.add_row("TLS / STARTTLS", "Yes" if email_cfg.use_tls else "No")
+    table.add_row("SSL", "Yes" if email_cfg.use_ssl else "No")
+    table.add_row("SMTP User", email_cfg.smtp_user or "[dim]Not set[/dim]")
+    table.add_row("Password Set", "[green]Yes[/green]" if email_cfg.smtp_password else "[dim]No[/dim]")
+    table.add_row("From Address", email_cfg.from_address or email_cfg.smtp_user or "[dim]Default[/dim]")
+    table.add_row("To Recipient(s)", email_cfg.to_address or "[dim]Not set[/dim]")
+    table.add_row("First Email Sent", state_data.get("first_email_sent_at", "[dim]Never[/dim]"))
+    table.add_row("Last Email Sent", state_data.get("last_email_sent_at", "[dim]Never[/dim]"))
+    if state_data.get("last_email_subject"):
+        table.add_row("Last Subject", state_data.get("last_email_subject", ""))
+
+    console.print(table)
+
+
+@notify_app.command("test")
+def notify_test() -> None:
+    """Send a test email to verify SMTP configuration and network connectivity."""
+    from tidal_cli.services.email_service import EmailService
+
+    email_svc = EmailService(cfg=state["config"])
+    if not email_svc.email_config.is_configured:
+        err_console.print(
+            "[bold red]Email not configured.[/bold red] Please run [cyan]tidal-cli notify config[/cyan] or set TIDAL_SMTP_* environment variables."
+        )
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"Sending test email to [cyan]{email_svc.email_config.to_address}[/cyan] via [bold]{email_svc.email_config.smtp_host}[/bold]..."
+    )
+    res = email_svc.send_test_email()
+
+    if state["json_mode"]:
+        console.print_json(data=res)
+        return
+
+    if res.get("success"):
+        console.print("[green]✓ Test email delivered successfully![/green]")
+    else:
+        err_console.print(f"[bold red]Delivery failed:[/bold red] {res.get('error')}")
+        raise typer.Exit(code=1)
+
+
+@notify_app.command("send")
+def notify_send(
+    all_playlists: bool = typer.Option(
+        False, "--all", "-a", help="Send the complete 'All Playlists Baseline Overview' email instead of changes digest"
+    ),
+) -> None:
+    """Manually dispatch an email digest (or all playlists overview with --all)."""
+    mgr = SessionManager(state["config"])
+    try:
+        session = mgr.load_session()
+        snapshot_svc = SnapshotService(session, cfg=state["config"])
+        batch_res = snapshot_svc.snapshot_all_playlists(
+            alert_on_unavailable=True, notify=True, force_all_mail=all_playlists
+        )
+    except Exception as e:
+        err_console.print(f"[bold red]Failed to dispatch notification:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    notif = batch_res.get("notification") or {}
+    if state["json_mode"]:
+        console.print_json(data=notif)
+        return
+
+    if notif.get("sent"):
+        tmpl = notif.get("template", "email")
+        console.print(f"[green]✓ Email notification successfully sent![/green] (Template: [bold]{tmpl}[/bold])")
+    else:
+        reason = notif.get("reason", notif.get("error", "Unknown"))
+        if reason == "not_configured":
+            console.print(
+                "[yellow]Email notifications are not configured in config.json or environment variables.[/yellow]"
+            )
+        elif reason == "no_changes_detected":
+            console.print(
+                "[cyan]No changes or alerts detected since last snapshot. Email was skipped.[/cyan] (Use [bold]--all[/bold] to send full overview)."
+            )
+        else:
+            err_console.print(f"[red]Notification dispatch error:[/red] {reason}")
+
+
+@notify_app.command("config")
+def notify_configure(
+    host: Optional[str] = typer.Option(None, "--host", "-h", help="SMTP server host (e.g. mail.example.com)"),
+    port: Optional[int] = typer.Option(None, "--port", "-p", help="SMTP server port (e.g. 25, 587 for TLS, 465 for SSL)"),
+    user: Optional[str] = typer.Option(None, "--user", "-u", help="SMTP username (optional for open relays)"),
+    password: Optional[str] = typer.Option(None, "--password", help="SMTP password (optional for open relays)"),
+    from_addr: Optional[str] = typer.Option(None, "--from-addr", help="Sender email address"),
+    to_addr: Optional[str] = typer.Option(None, "--to-addr", help="Recipient email address"),
+    tls: Optional[bool] = typer.Option(None, "--tls/--no-tls", help="Enable/disable STARTTLS (e.g. on port 25 or 587)"),
+    ssl: Optional[bool] = typer.Option(None, "--ssl/--no-ssl", help="Enable/disable direct SSL (e.g. on port 465)"),
+) -> None:
+    """Configure or update SMTP email notification settings in config.json."""
+    curr = state["config"].get_email_config()
+    update_dict = {
+        "smtp_host": host if host is not None else curr.smtp_host,
+        "smtp_port": port if port is not None else curr.smtp_port,
+        "smtp_user": user if user is not None else curr.smtp_user,
+        "smtp_password": password if password is not None else curr.smtp_password,
+        "from_address": from_addr if from_addr is not None else curr.from_address,
+        "to_address": to_addr if to_addr is not None else curr.to_address,
+        "use_tls": tls if tls is not None else curr.use_tls,
+        "use_ssl": ssl if ssl is not None else curr.use_ssl,
+    }
+    updated = curr.model_copy(update={k: v for k, v in update_dict.items() if v is not None})
+    state["config"].save_email_config(updated)
+    console.print(f"[green]Saved email configuration to {state['config'].config_file}[/green]")
+    if updated.is_configured:
+        console.print("[green]Email notifications are now enabled.[/green] Run [cyan]tidal-cli notify test[/cyan] to verify.")
+    else:
+        console.print(
+            "[yellow]Note: smtp_host and to_address are both required before notifications can be dispatched.[/yellow]"
+        )
 
 
 if __name__ == "__main__":

@@ -257,6 +257,45 @@ class SnapshotService:
         snapshots_list = manifest.get("snapshots", [])
         last_snapshot_exists = bool(snapshots_list and (pl_dir / snapshots_list[-1].get("filename", "")).exists())
 
+        # Compute track difference if previous snapshot exists and playlist has changed
+        diff = {"added": [], "removed": []}
+        prev_version = None
+        if has_changed and snapshots_list:
+            prev_version = len(snapshots_list)
+            prev_filename = snapshots_list[-1].get("filename", "")
+            prev_file = pl_dir / prev_filename
+            if prev_file.exists():
+                try:
+                    with open(prev_file, "r", encoding="utf-8") as f:
+                        prev_data = json.load(f) or {}
+                    prev_tracks = prev_data.get("tracks", [])
+                    prev_ids = {str(pt.get("id")): pt for pt in prev_tracks if pt.get("id") is not None}
+                    curr_ids = {str(getattr(t, "id", "")): t for t in tracks if getattr(t, "id", None) is not None}
+
+                    for t_id, t in curr_ids.items():
+                        if t_id not in prev_ids:
+                            diff["added"].append({
+                                "id": t_id,
+                                "title": getattr(t, "name", "Unknown Title"),
+                                "artist": getattr(getattr(t, "artist", None), "name", "Unknown Artist"),
+                                "album": getattr(getattr(t, "album", None), "name", "Unknown Album"),
+                            })
+
+                    for t_id, pt in prev_ids.items():
+                        if t_id not in curr_ids:
+                            pt_artist = pt.get("artist")
+                            artist_name = pt_artist.get("name") if isinstance(pt_artist, dict) else str(pt_artist or "Unknown Artist")
+                            pt_album = pt.get("album")
+                            album_name = pt_album.get("name") if isinstance(pt_album, dict) else str(pt_album or "Unknown Album")
+                            diff["removed"].append({
+                                "id": t_id,
+                                "title": pt.get("title", "Unknown Title"),
+                                "artist": artist_name,
+                                "album": album_name,
+                            })
+                except Exception as e:
+                    logger.debug(f"Failed to compute track diff for playlist '{playlist.name}': {e}")
+
         if has_changed or not last_snapshot_exists:
             data = serialize_playlist(playlist, tracks)
             data["snapshot_metadata"] = {
@@ -306,11 +345,17 @@ class SnapshotService:
             "new_alerts_count": len(newly_unavailable_alerts),
             "version_count": version_num,
             "version": version_num,
+            "prev_version": prev_version,
+            "diff": diff,
+            "added_count": len(diff["added"]),
+            "removed_count": len(diff["removed"]),
         }
 
     def snapshot_all_playlists(
         self,
         alert_on_unavailable: bool = True,
+        notify: bool = True,
+        force_all_mail: bool = False,
     ) -> Dict[str, Any]:
         """Iterate all user personal playlists, take snapshots of modified ones, and detect delisted tracks."""
         if not self.playlist_service:
@@ -339,9 +384,25 @@ class SnapshotService:
                     "error": str(e),
                 })
 
-        return {
+        batch_result = {
             "playlists_scanned": len(user_playlists),
             "snapshots_saved": total_snapshots_saved,
             "total_alerts": total_alerts,
             "playlists": results,
         }
+
+        notification_res = None
+        if notify:
+            try:
+                from tidal_cli.services.email_service import EmailService
+                email_svc = EmailService(cfg=self.config)
+                notification_res = email_svc.send_digest_notification(
+                    batch_results=batch_result,
+                    force_all=force_all_mail,
+                )
+            except Exception as e:
+                logger.error(f"Failed to dispatch email notification: {e}", exc_info=True)
+                notification_res = {"sent": False, "error": str(e)}
+
+        batch_result["notification"] = notification_res
+        return batch_result

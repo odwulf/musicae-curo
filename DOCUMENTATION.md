@@ -349,6 +349,36 @@ tidal-cli job cron-help
 
 ---
 
+### `notify` Subcommands (Email Notifications)
+```bash
+# Check current email notification status and delivery history
+tidal-cli notify status
+
+# Configure SMTP parameters in ~/.config/tidal-cli/config.json (e.g. port 25 with STARTTLS)
+tidal-cli notify config --host mail.myserver.org --port 25 --tls --user myuser --password mypass --to-addr listener@example.com --from-addr tidal-bot@example.com
+
+# Send a test email to verify credentials and SMTP connectivity
+tidal-cli notify test
+
+# Manually trigger a notification (sends Changes Digest if changes/alerts exist)
+tidal-cli notify send
+
+# Manually trigger full All Playlists Baseline Overview email
+tidal-cli notify send --all
+```
+
+#### Email Notification Behavior & Templates
+When email settings (`smtp_host` and `to_address`) are configured in `~/.config/tidal-cli/config.json` or via environment variables (`TIDAL_SMTP_*`), `tidal-cli` automatically sends HTML + plain-text email reports:
+1. **Very First Email Sent**: Dispatches the **All Playlists Baseline Overview** template, providing a complete inventory of all personal playlists, track counts, version numbers, and an initial delisted tracks audit.
+2. **Subsequent Daily Cron Runs (`daily-playlist-backup`)**: Compares SHA-256 track sequence hashes. If one or more playlists were modified, or if new unavailable track alerts occurred, dispatches the **Playlist Changes Digest**:
+   - Shows added tracks (`+N`) and removed tracks (`-M`) for each changed playlist.
+   - Shows version transitions (`v1 -> v2`).
+   - Highlights any unavailable tracks detected with historical recovery status.
+   - If nothing changed and no alerts fired, no email is sent to avoid inbox clutter.
+3. **Manual Triggering**: Run `tidal-cli notify send --all` at any time to receive the full catalog baseline overview.
+
+---
+
 ## 7. Extending Automations
 
 To add new automated routines, simply define additional jobs in `~/.config/tidal-cli/jobs.yaml`:
@@ -366,4 +396,5 @@ And add a corresponding schedule in your Linux crontab:
 ```cron
 0 2 * * 0 /path/to/.venv/bin/python -m tidal_cli.cli job run weekly-archive --quiet
 ```
+
 
