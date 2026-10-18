@@ -82,6 +82,11 @@ class MusicProvider(ABC):
         """Remove a track at a specific 0-based index from the playlist."""
         ...
 
+    @abstractmethod
+    def clear_playlist(self, playlist_id: str) -> bool:
+        """Remove all tracks from a playlist."""
+        ...
+
     # --- Discovery & Curated Mixes ---
     @abstractmethod
     def get_curated_mixes(self) -> List[CuratedMix]:

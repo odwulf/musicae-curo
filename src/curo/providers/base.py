@@ -72,6 +72,10 @@ class ProviderStub(MusicProvider):
         self._not_implemented("remove_track_from_playlist_by_index")
         return False
 
+    def clear_playlist(self, playlist_id: str) -> bool:
+        self._not_implemented("clear_playlist")
+        return False
+
     def get_curated_mixes(self) -> List[CuratedMix]:
         self._not_implemented("get_curated_mixes")
         return []

@@ -23,6 +23,7 @@ from curo.services.job_runner import JobExecutionError, JobRunner
 from curo.services.mix_service import MixService
 from curo.services.playlist_repair_service import PlaylistRepairService
 from curo.services.playlist_service import PlaylistService
+from curo.services.playlist_sync_service import PlaylistSyncService
 from curo.services.snapshot_service import SnapshotService
 
 app = typer.Typer(
@@ -596,6 +597,175 @@ def playlist_replace(
         )
     else:
         err_console.print(f"[bold red]Replacement status: {status}[/bold red]")
+
+
+@playlist_app.command("compare")
+def playlist_compare(
+    source_playlist: str = typer.Argument(..., help="Source playlist title or ID"),
+    target_playlist: str = typer.Argument(..., help="Target playlist title or ID"),
+    from_provider: Optional[str] = typer.Option(None, "--from", "--from-provider", help="Source streaming provider [default: active provider]"),
+    to_provider: Optional[str] = typer.Option(None, "--to", "--to-provider", help="Target streaming provider [default: source provider]"),
+    threshold: float = typer.Option(0.8, "--threshold", "-t", help="Minimum similarity threshold (0.0 - 1.0, default: 0.8)"),
+    export: Optional[Path] = typer.Option(None, "--export", help="Custom JSON report export path"),
+) -> None:
+    """Compare two playlists across providers or within the same provider."""
+    src_p = get_active_provider(from_provider, require_active=True)
+    tgt_name = to_provider or from_provider
+    tgt_p = get_active_provider(tgt_name, require_active=True)
+
+    sync_svc = PlaylistSyncService(source_provider=src_p, target_provider=tgt_p, cfg=state["config"])
+
+    try:
+        report = sync_svc.compare_playlists(
+            source_identifier=source_playlist,
+            target_identifier=target_playlist,
+            threshold=threshold,
+            export_path=export,
+        )
+    except Exception as e:
+        err_console.print(f"[bold red]Comparison failed: {e}[/bold red]")
+        raise typer.Exit(1)
+
+    if state["json_mode"]:
+        console.print_json(data=report)
+        return
+
+    title = f"Playlist Comparison: '{report['source_playlist_name']}' [{src_p.display_name}] -> '{report['target_playlist_name']}' [{tgt_p.display_name}]"
+    table = Table(title=title, border_style="cyan")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column(f"Source Track ({src_p.display_name})", style="bold")
+    table.add_column("Artist")
+    table.add_column(f"Target Resolution ({tgt_p.display_name})", style="bold green")
+    table.add_column("Score", justify="right")
+    table.add_column("Sync Action")
+
+    for item in report.get("diff_items", []):
+        s_idx = str(item.get("source_index") or "-")
+        s_t = item.get("source_track") or {}
+        t_t = item.get("target_track") or {}
+
+        s_title = s_t.get("title") or "[dim](Not in Source)[/dim]"
+        artist = s_t.get("artist") or t_t.get("artist") or ""
+
+        if t_t and t_t.get("title"):
+            cand_id = t_t.get("id")
+            cand_str = f"{t_t['title']} (ID: {cand_id})" if cand_id else t_t["title"]
+        else:
+            cand_str = "[dim]Not found on target[/dim]"
+
+        score = item.get("similarity_score", 0.0)
+        score_pct = f"{score * 100:.0f}%" if score > 0 else "-"
+
+        action = item.get("action", "")
+        if action == "keep":
+            act_str = "[green]in_sync[/green]"
+        elif action == "to_add":
+            act_str = "[bold yellow]to_add[/bold yellow]"
+        elif action == "extra_in_target":
+            act_str = "[dim cyan]extra_in_target[/dim cyan]"
+        elif action == "unresolvable":
+            act_str = "[bold red]unresolvable[/bold red]"
+        else:
+            act_str = action
+
+        table.add_row(s_idx, s_title, artist, cand_str, score_pct, act_str)
+
+    console.print()
+    console.print(table)
+    console.print(
+        f"\n[bold]In Sync:[/bold] [green]{report['in_sync_count']}[/green] | "
+        f"[bold]To Add:[/bold] [yellow]{report['missing_in_target_count']}[/yellow] | "
+        f"[bold]Extra in Target:[/bold] [cyan]{report['extra_in_target_count']}[/cyan] | "
+        f"[bold]Unresolvable:[/bold] [red]{report['unresolvable_count']}[/red]"
+    )
+    console.print(f"Report exported to: [dim]{report['exported_to']}[/dim]\n")
+
+
+@playlist_app.command("sync")
+def playlist_sync(
+    source_playlist: str = typer.Argument(..., help="Source playlist title or ID"),
+    target_playlist: Optional[str] = typer.Option(None, "--target", "--target-playlist", help="Target playlist title [default: same as source]"),
+    from_provider: Optional[str] = typer.Option(None, "--from", "--from-provider", help="Source streaming provider [default: active provider]"),
+    to_provider: Optional[str] = typer.Option(None, "--to", "--to-provider", help="Target streaming provider [default: source provider]"),
+    mode: str = typer.Option("mirror", "--mode", "-m", help="Sync mode: 'mirror' (exact sequence) or 'append' (add missing only)"),
+    threshold: float = typer.Option(0.8, "--threshold", "-t", help="Minimum similarity threshold (0.0 - 1.0, default: 0.8)"),
+    live: bool = typer.Option(False, "--live", help="Apply mutations live on target provider (default: dry-run)"),
+    no_create: bool = typer.Option(False, "--no-create", help="Fail if target playlist does not exist instead of auto-creating"),
+    export: Optional[Path] = typer.Option(None, "--export", help="Custom JSON report export path"),
+) -> None:
+    """Synchronize playlist tracks from one provider to another (or within the same provider)."""
+    src_p = get_active_provider(from_provider, require_active=True)
+    tgt_name = to_provider or from_provider
+    tgt_p = get_active_provider(tgt_name, require_active=True)
+
+    sync_svc = PlaylistSyncService(source_provider=src_p, target_provider=tgt_p, cfg=state["config"])
+
+    try:
+        report = sync_svc.sync_playlists(
+            source_identifier=source_playlist,
+            target_identifier=target_playlist,
+            mode=mode,
+            threshold=threshold,
+            dry_run=not live,
+            create_if_missing=not no_create,
+            export_path=export,
+        )
+    except Exception as e:
+        err_console.print(f"[bold red]Sync failed: {e}[/bold red]")
+        raise typer.Exit(1)
+
+    if state["json_mode"]:
+        console.print_json(data=report)
+        return
+
+    mode_str = "[bold yellow]DRY-RUN (Simulated)[/bold yellow]" if not live else "[bold green]LIVE (Mutated)[/bold green]"
+    title = f"Playlist Sync: '{report['source_playlist_name']}' [{src_p.display_name}] -> '{report['target_playlist_name']}' [{tgt_p.display_name}] ({mode_str})"
+
+    table = Table(title=title, border_style="yellow" if not live else "green")
+    table.add_column("Property", style="bold")
+    table.add_column("Value")
+
+    table.add_row("Sync Mode", f"[bold]{mode}[/bold]")
+    table.add_row("Source Tracks", str(report["source_tracks_count"]))
+    table.add_row("Target Tracks (Before)", str(report["target_tracks_before"]))
+    table.add_row("Tracks Resolved", f"[green]{report['tracks_resolved_count']}[/green]")
+    table.add_row("Tracks Added", f"[bold green]{report['tracks_added']}[/bold green]")
+    table.add_row("Tracks Removed", f"[red]{report['tracks_removed']}[/red]")
+    table.add_row("Target Tracks (After)", str(report["target_tracks_after"]))
+    if report.get("target_playlist_created"):
+        table.add_row("Target Created", "[green]Yes[/green]")
+    if report["tracks_unresolvable_count"] > 0:
+        table.add_row("Unresolvable Tracks", f"[bold red]{report['tracks_unresolvable_count']}[/bold red]")
+
+    console.print()
+    console.print(table)
+
+    if report["unresolvable_tracks"]:
+        unavail_table = Table(title="Unresolvable Source Tracks (Not Found on Target)", border_style="red")
+        unavail_table.add_column("#", justify="right", style="dim")
+        unavail_table.add_column("Track", style="bold")
+        unavail_table.add_column("Artist")
+        unavail_table.add_column("ISRC", style="dim")
+        for u in report["unresolvable_tracks"]:
+            unavail_table.add_row(
+                str(u.get("source_index", "-")),
+                u.get("source_title", "Unknown"),
+                u.get("source_artist", "Unknown"),
+                u.get("source_isrc") or "[dim]None[/dim]",
+            )
+        console.print()
+        console.print(unavail_table)
+
+    if not live:
+        console.print(
+            f"\n[dim]Note: This was a simulation. To apply changes live on {tgt_p.display_name}, pass [bold]--live[/bold].[/dim]"
+        )
+    else:
+        console.print(
+            f"\n[bold green]Successfully synchronized '{report['target_playlist_name']}' on {tgt_p.display_name}![/bold green]"
+        )
+
+    console.print(f"Report exported to: [dim]{report['exported_to']}[/dim]\n")
 
 
 # ---------------------------------------------------------------------------

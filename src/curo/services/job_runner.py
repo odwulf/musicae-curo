@@ -118,6 +118,32 @@ class JobRunner:
                         identifier=params["playlist"],
                         alert_on_unavailable=params.get("alert_on_unavailable", True),
                     )
+                elif action_type == "sync_playlist":
+                    from curo.services.playlist_sync_service import PlaylistSyncService
+
+                    src_p_name = params.get("source_provider") or self.provider.name
+                    tgt_p_name = params.get("target_provider") or src_p_name
+
+                    src_p = (
+                        self.provider
+                        if src_p_name == self.provider.name
+                        else ProviderRegistry.create_provider(src_p_name, cfg=self.config)
+                    )
+                    tgt_p = (
+                        src_p
+                        if tgt_p_name == src_p_name
+                        else ProviderRegistry.create_provider(tgt_p_name, cfg=self.config)
+                    )
+
+                    sync_svc = PlaylistSyncService(source_provider=src_p, target_provider=tgt_p, cfg=self.config)
+                    res = sync_svc.sync_playlists(
+                        source_identifier=params["source_playlist"],
+                        target_identifier=params.get("target_playlist"),
+                        mode=params.get("mode", "mirror"),
+                        threshold=params.get("threshold", 0.8),
+                        dry_run=params.get("dry_run", False),
+                        create_if_missing=params.get("create_if_missing", True),
+                    )
                 else:
                     raise JobExecutionError(f"Unknown action type: {action_type}")
 
