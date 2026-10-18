@@ -445,10 +445,69 @@ def playlist_repair(
         console.print_json(data=report)
         return
 
-    mode_str = "[bold yellow]DRY-RUN (Simulated)[/bold yellow]" if not live else "[bold green]LIVE (Mutated)[/bold green]"
-    console.print(f"\n{mode_str} Analysis for '{report['playlist_name']}' on {p.display_name}")
-    console.print(f"Unavailable Tracks: {report['unavailable_tracks_count']} | Replacements Applied: {report['replacements_applied']}")
-    console.print(f"Report exported to: [dim]{report['exported_to']}[/dim]\n")
+    unavail_count = report["unavailable_tracks_count"]
+    mode_str = "[bold yellow]DRY-RUN (Simulated)[/bold yellow]" if not live else "[bold green]LIVE (Mutating)[/bold green]"
+    title = f"Playlist Repair: {report['playlist_name']} ({mode_str}, Threshold: {int(threshold * 100)}%)"
+
+    if unavail_count == 0:
+        console.print(
+            Panel(
+                f"[green]All {report['total_tracks']} tracks are active and playable on {p.display_name}![/green]",
+                title=title,
+                border_style="green",
+            )
+        )
+        console.print(f"[dim]Diagnostic report written to: {report['exported_to']}[/dim]\n")
+        return
+
+    table = Table(title=title, border_style="yellow")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Unavailable Track", style="bold red")
+    table.add_column("Artist")
+    table.add_column("Best Candidate", style="bold green")
+    table.add_column("Score", justify="right")
+    table.add_column("Action / Status")
+
+    for u in report.get("unavailable_tracks", []):
+        orig = u.get("original_track", {})
+        best = u.get("best_candidate")
+        idx_str = str(u.get("index_in_playlist", 0) + 1)
+        orig_title = orig.get("title", "Unknown Track")
+        orig_artist = orig.get("artist", "Unknown Artist")
+
+        if best:
+            cand_title = f"{best['title']} (ID: {best['id']})"
+            score_val = best.get("similarity_score", 0.0)
+            score_pct = f"{score_val * 100:.1f}%"
+            score_style = (
+                "bold green"
+                if score_val >= 0.8
+                else ("bold yellow" if score_val >= 0.5 else "dim red")
+            )
+            status = u.get("replacement_status", "pending")
+            if best.get("requires_manual_approval"):
+                status = f"[yellow]{status}[/yellow] (needs manual approval)"
+            table.add_row(
+                idx_str,
+                orig_title,
+                orig_artist,
+                cand_title,
+                f"[{score_style}]{score_pct}[/{score_style}]",
+                status,
+            )
+        else:
+            table.add_row(
+                idx_str,
+                orig_title,
+                orig_artist,
+                "[dim]No candidate found[/dim]",
+                "0.0%",
+                "[red]no_candidates[/red]",
+            )
+
+    console.print()
+    console.print(table)
+    console.print(f"\n[bold]Full diagnostic report written to:[/bold] [cyan]{report['exported_to']}[/cyan]\n")
 
 
 @playlist_app.command("replace")
