@@ -135,23 +135,8 @@ class PlaylistService:
         fmt = export_format.lower().strip()
 
         if fmt == "json":
-            data = {
-                "id": pl.id,
-                "name": pl.name,
-                "description": getattr(pl, "description", ""),
-                "track_count": len(tracks),
-                "tracks": [
-                    {
-                        "id": t.id,
-                        "title": t.name,
-                        "artist": getattr(getattr(t, "artist", None), "name", "Unknown Artist"),
-                        "album": getattr(getattr(t, "album", None), "name", "Unknown Album"),
-                        "duration_seconds": getattr(t, "duration", 0),
-                        "isrc": getattr(t, "isrc", ""),
-                    }
-                    for t in tracks
-                ],
-            }
+            from tidal_cli.services.metadata_serializer import serialize_playlist
+            data = serialize_playlist(pl, tracks)
             return json.dumps(data, indent=2, ensure_ascii=False)
 
         elif fmt in ("m3u", "m3u8"):
