@@ -6,10 +6,6 @@ import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from tidalapi.album import Album
-from tidalapi.media import Track
-from tidalapi.playlist import Playlist, UserPlaylist
-
 
 def _is_mock(val: Any) -> bool:
     """Detect if an object is an unconfigured unittest MagicMock."""
@@ -85,6 +81,7 @@ def _serialize_artist(artist: Any) -> Optional[Dict[str, Any]]:
     return {
         "id": a_id,
         "name": a_name or "Unknown Artist",
+        "provider": _clean_str(getattr(artist, "provider", None)),
         "type": _clean_str(getattr(artist, "type", None)),
         "picture": _clean_str(getattr(artist, "picture", None)),
         "url": _clean_str(getattr(artist, "url", None)),
@@ -96,24 +93,26 @@ def _serialize_album_summary(album: Any) -> Optional[Dict[str, Any]]:
     if not album:
         return None
     alb_id = _clean_int(getattr(album, "id", None)) or _clean_str(getattr(album, "id", None))
-    alb_name = _clean_str(getattr(album, "name", None))
+    alb_name = _clean_str(getattr(album, "name", None)) or _clean_str(getattr(album, "title", None))
     if not alb_id and not alb_name:
         return None
 
     return {
         "id": alb_id,
         "name": alb_name or "Unknown Album",
+        "title": alb_name or "Unknown Album",
+        "upc": _clean_str(getattr(album, "upc", None)),
         "release_date": _clean_str(getattr(album, "release_date", None)),
         "cover": _clean_str(getattr(album, "cover", None)),
-        "video_cover": _clean_str(getattr(album, "video_cover", None)),
         "url": _clean_str(getattr(album, "listen_url", None) or getattr(album, "share_url", None)),
     }
 
 
-def serialize_track(track: Track) -> Dict[str, Any]:
+def serialize_track(track: Any) -> Dict[str, Any]:
     """Extract all available metadata from a Track object."""
     artists_list = []
-    raw_artists = getattr(track, "artists", [])
+    collab = getattr(track, "collaborating_artists", None)
+    raw_artists = collab if (collab is not None and not _is_mock(collab)) else getattr(track, "artists", [])
     if isinstance(raw_artists, (list, tuple)):
         for a in raw_artists:
             serialized_a = _serialize_artist(a)
@@ -122,15 +121,20 @@ def serialize_track(track: Track) -> Dict[str, Any]:
 
     track_id = getattr(track, "id", None)
     clean_id = _clean_int(track_id) or _clean_str(track_id)
-    name = _clean_str(getattr(track, "name", "")) or ""
+    name = _clean_str(getattr(track, "name", None)) or _clean_str(getattr(track, "title", "")) or ""
     full_name = _clean_str(getattr(track, "full_name", None)) or name
+
+    dur = _clean_int(getattr(track, "duration_seconds", None))
+    if dur is None:
+        dur = _clean_int(getattr(track, "duration", None))
 
     return {
         "id": clean_id,
         "name": name,
         "title": name,
         "full_name": full_name,
-        "duration_seconds": _clean_int(getattr(track, "duration", None)),
+        "provider": _clean_str(getattr(track, "provider", None)),
+        "duration_seconds": _clean_int(dur),
         "track_number": _clean_int(getattr(track, "track_num", None)),
         "volume_number": _clean_int(getattr(track, "volume_num", None)),
         "index": _clean_int(getattr(track, "index", None)),
@@ -149,22 +153,22 @@ def serialize_track(track: Track) -> Dict[str, Any]:
         "replay_gain": _clean_float(getattr(track, "replay_gain", None)),
         "peak": _clean_float(getattr(track, "peak", None)),
         "copyright": _clean_str(getattr(track, "copyright", None)),
-        "allow_streaming": _clean_bool(getattr(track, "allow_streaming", None)),
-        "stream_ready": _clean_bool(getattr(track, "stream_ready", None)),
+        "allow_streaming": _clean_bool(getattr(track, "allow_streaming", True)),
+        "stream_ready": _clean_bool(getattr(track, "stream_ready", True)),
         "stream_start_date": _clean_str(getattr(track, "stream_start_date", None)),
         "tidal_release_date": _clean_str(getattr(track, "tidal_release_date", None)),
         "date_added": _clean_str(getattr(track, "date_added", None)),
+        "available": _clean_bool(getattr(track, "available", True)),
         "version": _clean_str(getattr(track, "version", None)),
-        "listen_url": _clean_str(getattr(track, "listen_url", None)) or (f"https://tidal.com/browse/track/{clean_id}" if clean_id else None),
+        "listen_url": _clean_str(getattr(track, "listen_url", None)),
         "share_url": _clean_str(getattr(track, "share_url", None)),
         "artist": _serialize_artist(getattr(track, "artist", None)),
         "artists": artists_list,
-        "artist_roles": _clean_str(getattr(track, "artist_roles", None)),
         "album": _serialize_album_summary(getattr(track, "album", None)),
     }
 
 
-def serialize_playlist(playlist: Playlist | UserPlaylist, tracks: List[Track]) -> Dict[str, Any]:
+def serialize_playlist(playlist: Any, tracks: List[Any]) -> Dict[str, Any]:
     """Serialize full playlist metadata and all included tracks."""
     creator_obj = getattr(playlist, "creator", None)
     creator_info = None
@@ -179,33 +183,29 @@ def serialize_playlist(playlist: Playlist | UserPlaylist, tracks: List[Track]) -
 
     pl_id = getattr(playlist, "id", None)
     clean_id = _clean_str(pl_id) or str(pl_id)
-    pl_name = _clean_str(getattr(playlist, "name", "")) or ""
+    pl_name = _clean_str(getattr(playlist, "name", None)) or _clean_str(getattr(playlist, "title", "")) or ""
+
+    dur = getattr(playlist, "duration_seconds", None) or getattr(playlist, "duration", None)
 
     return {
         "type": "playlist",
         "id": clean_id,
         "name": pl_name,
         "title": pl_name,
+        "provider": _clean_str(getattr(playlist, "provider", None)),
         "description": _clean_str(getattr(playlist, "description", "")) or "",
         "created": _clean_str(getattr(playlist, "created", None)),
-        "last_updated": _clean_str(getattr(playlist, "last_updated", None)),
-        "last_item_added_at": _clean_str(getattr(playlist, "last_item_added_at", None)),
-        "duration_seconds": _clean_int(getattr(playlist, "duration", None)),
+        "last_updated": _clean_str(getattr(playlist, "last_updated", None) or getattr(playlist, "updated_at", None)),
+        "duration_seconds": _clean_int(dur),
         "num_tracks": len(tracks),
         "track_count": len(tracks),
-        "num_videos": _clean_int(getattr(playlist, "num_videos", 0), default=0),
-        "public": _clean_bool(getattr(playlist, "public", False)),
-        "popularity": _clean_int(getattr(playlist, "popularity", None)),
+        "public": _clean_bool(getattr(playlist, "is_public", False) or getattr(playlist, "public", False)),
         "creator": creator_info,
-        "listen_url": _clean_str(getattr(playlist, "listen_url", None)) or (f"https://tidal.com/browse/playlist/{clean_id}" if clean_id else None),
-        "share_url": _clean_str(getattr(playlist, "share_url", None)),
-        "image": _clean_str(getattr(playlist, "image", None)),
-        "square_picture": _clean_str(getattr(playlist, "square_picture", None)),
         "tracks": [serialize_track(t) for t in tracks],
     }
 
 
-def serialize_album(album: Album, tracks: List[Track]) -> Dict[str, Any]:
+def serialize_album(album: Any, tracks: List[Any]) -> Dict[str, Any]:
     """Serialize full album metadata and all included tracks."""
     artists_list = []
     raw_artists = getattr(album, "artists", [])
@@ -217,37 +217,23 @@ def serialize_album(album: Album, tracks: List[Track]) -> Dict[str, Any]:
 
     alb_id = getattr(album, "id", None)
     clean_id = _clean_int(alb_id) or _clean_str(alb_id)
-    alb_name = _clean_str(getattr(album, "name", "")) or ""
+    alb_name = _clean_str(getattr(album, "name", None)) or _clean_str(getattr(album, "title", "")) or ""
+
+    dur = getattr(album, "duration_seconds", None) or getattr(album, "duration", None)
 
     return {
         "type": "album",
         "id": clean_id,
         "name": alb_name,
         "title": alb_name,
+        "provider": _clean_str(getattr(album, "provider", None)),
         "version": _clean_str(getattr(album, "version", None)),
-        "duration_seconds": _clean_int(getattr(album, "duration", None)),
+        "duration_seconds": _clean_int(dur),
         "num_tracks": len(tracks),
         "track_count": len(tracks),
-        "num_videos": _clean_int(getattr(album, "num_videos", 0), default=0),
-        "num_volumes": _clean_int(getattr(album, "num_volumes", 1), default=1),
         "release_date": _clean_str(getattr(album, "release_date", None)),
-        "available_release_date": _clean_str(getattr(album, "available_release_date", None)),
-        "tidal_release_date": _clean_str(getattr(album, "tidal_release_date", None)),
-        "year": _clean_int(getattr(album, "year", None)),
-        "copyright": _clean_str(getattr(album, "copyright", None)),
-        "explicit": _clean_bool(getattr(album, "explicit", False)),
-        "upc": _clean_str(getattr(album, "upc", None) or getattr(album, "universal_product_number", None)),
-        "popularity": _clean_int(getattr(album, "popularity", None)),
-        "audio_quality": _clean_str(getattr(album, "audio_quality", None)),
-        "audio_modes": _clean_list(getattr(album, "audio_modes", [])),
-        "media_metadata_tags": _clean_list(getattr(album, "media_metadata_tags", [])),
-        "cover": _clean_str(getattr(album, "cover", None)),
-        "video_cover": _clean_str(getattr(album, "video_cover", None)),
+        "upc": _clean_str(getattr(album, "upc", None)),
         "artist": _serialize_artist(getattr(album, "artist", None)),
         "artists": artists_list,
-        "listen_url": _clean_str(getattr(album, "listen_url", None)) or (f"https://tidal.com/browse/album/{clean_id}" if clean_id else None),
-        "share_url": _clean_str(getattr(album, "share_url", None)),
-        "allow_streaming": _clean_bool(getattr(album, "allow_streaming", None)),
         "tracks": [serialize_track(t) for t in tracks],
     }
-

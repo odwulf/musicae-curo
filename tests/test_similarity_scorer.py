@@ -1,7 +1,7 @@
 """Tests for similarity_scorer multi-factor scoring and version mismatch penalties."""
 
 from unittest.mock import MagicMock
-from tidal_cli.services.similarity_scorer import evaluate_candidate
+from curo.services.similarity_scorer import evaluate_candidate
 
 
 def make_track(name: str, artist_name: str, duration: int, isrc: str = "", album_name: str = "", upc: str = "", artist_id: int = 1, release_date: str = "", artists: list = None):

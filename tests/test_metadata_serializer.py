@@ -3,7 +3,7 @@
 import datetime
 import json
 from unittest.mock import MagicMock
-from tidal_cli.services.metadata_serializer import (
+from curo.services.metadata_serializer import (
     serialize_album,
     serialize_playlist,
     serialize_track,

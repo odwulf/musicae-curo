@@ -1,7 +1,7 @@
 [project]
-name = "tidal-cli"
+name = "musicae-curo"
 version = "0.1.0"
-description = "Schedulable Tidal CLI client for playlist management and automated daily discovery mixes"
+description = "Universal music library custodian, playlist protector, and daily discovery mix archiver"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -18,11 +18,15 @@ dev = [
 ]
 
 [project.scripts]
-tidal-cli = "tidal_cli.cli:app"
+curo = "curo.cli:app"
+
+[project.urls]
+Repository = "https://github.com/odwulf/musicae-curo"
+Issues = "https://github.com/odwulf/musicae-curo/issues"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/tidal_cli"]
+packages = ["src/curo"]

@@ -10,14 +10,12 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-import tidalapi
+from curo.config import ConfigManager, config_manager
+from curo.core.provider import MusicProvider
+from curo.services.metadata_serializer import serialize_playlist
+from curo.services.track_matcher import is_track_available
 
-from tidal_cli.config import ConfigManager, config_manager
-from tidal_cli.services.metadata_serializer import serialize_playlist
-from tidal_cli.services.playlist_service import PlaylistService
-from tidal_cli.services.track_matcher import is_track_available
-
-logger = logging.getLogger("tidal_cli.snapshot_service")
+logger = logging.getLogger(__name__)
 
 
 def _slugify(text: str) -> str:
@@ -31,16 +29,15 @@ class SnapshotService:
 
     def __init__(
         self,
-        session: Optional[tidalapi.Session] = None,
+        provider: Optional[MusicProvider] = None,
         cfg: Optional[ConfigManager] = None,
         snapshots_dir: Optional[Path] = None,
     ) -> None:
-        self.session = session
+        self.provider = provider
         self.config = cfg or config_manager
         self.snapshots_dir = snapshots_dir or self.config.snapshots_dir
         self.index_file = self.snapshots_dir / "index.json"
         self.alerts_log_file = self.config.alerts_log_file
-        self.playlist_service = PlaylistService(session) if session else None
 
     def _ensure_dirs(self) -> None:
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)
@@ -100,16 +97,20 @@ class SnapshotService:
                 continue
 
             artist_name = getattr(getattr(t, "artist", None), "name", "Unknown Artist")
-            album_name = getattr(album, "name", "Unknown Album") if album else "Unknown Album"
+            album_name = (
+                getattr(album, "name", None) or getattr(album, "title", "Unknown Album")
+                if album
+                else "Unknown Album"
+            )
 
             entry = registry.get(t_id, {})
             if not entry:
                 entry = {
                     "id": getattr(t, "id", None),
-                    "title": getattr(t, "name", ""),
+                    "title": getattr(t, "name", None) or getattr(t, "title", ""),
                     "artist": artist_name,
                     "album": album_name,
-                    "duration_seconds": getattr(t, "duration", None),
+                    "duration_seconds": getattr(t, "duration_seconds", None) or getattr(t, "duration", None),
                     "isrc": isrc,
                     "album_upc": upc,
                     "album_release_date": release_date,
@@ -119,7 +120,6 @@ class SnapshotService:
                 registry[t_id] = entry
                 updated = True
             else:
-                # Update last known healthy ISRC and UPC if newly available
                 if isrc and not entry.get("isrc"):
                     entry["isrc"] = isrc
                     updated = True
@@ -179,20 +179,19 @@ class SnapshotService:
     ) -> Dict[str, Any]:
         """Save versioned snapshot of a playlist if modified, and check for delisted tracks."""
         self._ensure_dirs()
-        if not self.playlist_service:
-            raise RuntimeError("An active Tidal session is required to snapshot playlists.")
+        if not self.provider:
+            raise RuntimeError("An active MusicProvider is required to snapshot playlists.")
 
-        playlist = self.playlist_service.get_playlist(identifier)
+        playlist = self.provider.get_playlist(identifier)
         if not playlist:
             raise ValueError(f"Playlist not found: {identifier}")
 
-        tracks = playlist.tracks()
+        tracks = self.provider.get_playlist_tracks(playlist.id)
         slug = _slugify(playlist.name)
         pl_dir = self.snapshots_dir / slug
         pl_dir.mkdir(parents=True, exist_ok=True)
         manifest_file = pl_dir / "manifest.json"
 
-        # Load existing manifest
         manifest: Dict[str, Any] = {}
         if manifest_file.exists():
             try:
@@ -210,10 +209,8 @@ class SnapshotService:
         snapshot_filename = f"{timestamp_str}.json"
         snapshot_path = pl_dir / snapshot_filename
 
-        # Update global track registry with active track info
         self.update_track_registry(tracks, slug)
 
-        # Detect availability & generate alerts
         unavailable_tracks = []
         newly_unavailable_alerts = []
         for idx, t in enumerate(tracks):
@@ -222,9 +219,9 @@ class SnapshotService:
                 unavail_info = {
                     "index": idx,
                     "id": t.id,
-                    "title": getattr(t, "name", "Unknown Title"),
+                    "title": getattr(t, "name", None) or getattr(t, "title", "Unknown Title"),
                     "artist": getattr(getattr(t, "artist", None), "name", "Unknown Artist"),
-                    "album": getattr(getattr(t, "album", None), "name", "Unknown Album"),
+                    "album": getattr(getattr(t, "album", None), "name", None) or getattr(getattr(t, "album", None), "title", "Unknown Album"),
                     "historical_isrc": hist.get("isrc"),
                     "historical_upc": hist.get("album_upc"),
                 }
@@ -233,6 +230,7 @@ class SnapshotService:
                 if alert_on_unavailable:
                     alert = {
                         "timestamp": now_utc.isoformat(),
+                        "provider": self.provider.name,
                         "playlist_id": str(playlist.id),
                         "playlist_name": playlist.name,
                         "playlist_slug": slug,
@@ -257,135 +255,132 @@ class SnapshotService:
         snapshots_list = manifest.get("snapshots", [])
         last_snapshot_exists = bool(snapshots_list and (pl_dir / snapshots_list[-1].get("filename", "")).exists())
 
-        # Compute track difference if previous snapshot exists and playlist has changed
-        diff = {"added": [], "removed": []}
-        prev_version = None
-        if has_changed and snapshots_list:
-            prev_version = len(snapshots_list)
-            prev_filename = snapshots_list[-1].get("filename", "")
-            prev_file = pl_dir / prev_filename
-            if prev_file.exists():
-                try:
-                    with open(prev_file, "r", encoding="utf-8") as f:
-                        prev_data = json.load(f) or {}
+        track_diff: Dict[str, Any] = {"added_tracks": [], "removed_tracks": [], "reordered": False}
+        if has_changed and last_snapshot_exists:
+            try:
+                prev_file = pl_dir / snapshots_list[-1]["filename"]
+                with open(prev_file, "r", encoding="utf-8") as f:
+                    prev_data = json.load(f)
                     prev_tracks = prev_data.get("tracks", [])
-                    prev_ids = {str(pt.get("id")): pt for pt in prev_tracks if pt.get("id") is not None}
-                    curr_ids = {str(getattr(t, "id", "")): t for t in tracks if getattr(t, "id", None) is not None}
+                    prev_ids = [str(t.get("id")) for t in prev_tracks]
+                    curr_ids = [str(getattr(t, "id", "")) for t in tracks]
 
-                    for t_id, t in curr_ids.items():
-                        if t_id not in prev_ids:
-                            diff["added"].append({
-                                "id": t_id,
-                                "title": getattr(t, "name", "Unknown Title"),
-                                "artist": getattr(getattr(t, "artist", None), "name", "Unknown Artist"),
-                                "album": getattr(getattr(t, "album", None), "name", "Unknown Album"),
+                    prev_set = set(prev_ids)
+                    curr_set = set(curr_ids)
+
+                    added_ids = curr_set - prev_set
+                    removed_ids = prev_set - curr_set
+
+                    for t in tracks:
+                        if str(getattr(t, "id", "")) in added_ids:
+                            track_diff["added_tracks"].append({
+                                "id": getattr(t, "id", None),
+                                "title": getattr(t, "name", None) or getattr(t, "title", ""),
+                                "artist": getattr(getattr(t, "artist", None), "name", ""),
                             })
 
-                    for t_id, pt in prev_ids.items():
-                        if t_id not in curr_ids:
-                            pt_artist = pt.get("artist")
-                            artist_name = pt_artist.get("name") if isinstance(pt_artist, dict) else str(pt_artist or "Unknown Artist")
-                            pt_album = pt.get("album")
-                            album_name = pt_album.get("name") if isinstance(pt_album, dict) else str(pt_album or "Unknown Album")
-                            diff["removed"].append({
-                                "id": t_id,
-                                "title": pt.get("title", "Unknown Title"),
-                                "artist": artist_name,
-                                "album": album_name,
+                    for t in prev_tracks:
+                        if str(t.get("id")) in removed_ids:
+                            track_diff["removed_tracks"].append({
+                                "id": t.get("id"),
+                                "title": t.get("title") or t.get("name", ""),
+                                "artist": getattr(t.get("artist"), "get", lambda k, d="": d)("name") if isinstance(t.get("artist"), dict) else "",
                             })
-                except Exception as e:
-                    logger.debug(f"Failed to compute track diff for playlist '{playlist.name}': {e}")
 
+                    if not added_ids and not removed_ids and prev_ids != curr_ids:
+                        track_diff["reordered"] = True
+            except Exception as e:
+                logger.debug(f"Failed to compute track diff for '{slug}': {e}")
+
+        # Save new snapshot if changed or first snapshot
         if has_changed or not last_snapshot_exists:
-            data = serialize_playlist(playlist, tracks)
-            data["snapshot_metadata"] = {
-                "generated_at": now_utc.isoformat(),
-                "content_hash": current_hash,
-                "unavailable_count": len(unavailable_tracks),
-            }
-            with open(snapshot_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            saved_path = str(snapshot_path)
+            full_data = serialize_playlist(playlist, tracks)
+            full_data["content_hash"] = current_hash
+            full_data["snapshot_created_at"] = now_utc.isoformat()
+            full_data["version"] = len(snapshots_list) + 1
 
-            snapshot_entry = {
-                "timestamp": timestamp_str,
+            with open(snapshot_path, "w", encoding="utf-8") as f:
+                json.dump(full_data, f, indent=2, ensure_ascii=False)
+
+            manifest["playlist_id"] = str(playlist.id)
+            manifest["playlist_name"] = playlist.name
+            manifest["playlist_slug"] = slug
+            manifest["provider"] = self.provider.name
+            manifest["last_content_hash"] = current_hash
+            manifest["last_snapshot_at"] = now_utc.isoformat()
+
+            new_snapshot_record = {
+                "version": len(snapshots_list) + 1,
+                "timestamp": now_utc.isoformat(),
                 "filename": snapshot_filename,
-                "num_tracks": len(tracks),
                 "content_hash": current_hash,
+                "track_count": len(tracks),
                 "unavailable_count": len(unavailable_tracks),
             }
-            manifest.setdefault("playlist_id", str(playlist.id))
-            manifest["playlist_name"] = playlist.name
-            manifest["slug"] = slug
-            manifest["last_snapshot_at"] = now_utc.isoformat()
-            manifest["last_content_hash"] = current_hash
-            manifest.setdefault("snapshots", []).append(snapshot_entry)
+            snapshots_list.append(new_snapshot_record)
+            manifest["snapshots"] = snapshots_list
 
             with open(manifest_file, "w", encoding="utf-8") as f:
                 json.dump(manifest, f, indent=2, ensure_ascii=False)
 
-        latest_filename = manifest.get("snapshots", [{}])[-1].get("filename", "") if manifest.get("snapshots") else ""
-        current_file_path = saved_path or (str(pl_dir / latest_filename) if latest_filename else None)
-
-        version_num = len(manifest.get("snapshots", []))
+            saved_path = str(snapshot_path)
+            logger.info(
+                f"Saved snapshot v{new_snapshot_record['version']} for playlist '{playlist.name}' ({len(tracks)} tracks)"
+            )
+        is_created = bool(has_changed or not last_snapshot_exists)
         return {
+            "id": str(playlist.id),
             "playlist_id": str(playlist.id),
-            "playlist_name": playlist.name,
             "name": playlist.name,
-            "slug": slug,
+            "playlist_name": playlist.name,
+            "playlist_slug": slug,
+            "provider": self.provider.name,
+            "status": "created" if is_created else "unchanged",
             "has_changed": has_changed,
-            "status": "created" if saved_path is not None else "unchanged",
-            "snapshot_saved": saved_path is not None,
-            "snapshot_file": current_file_path,
-            "total_tracks": len(tracks),
+            "content_hash": current_hash,
             "track_count": len(tracks),
+            "total_tracks": len(tracks),
             "unavailable_count": len(unavailable_tracks),
             "unavailable_tracks_count": len(unavailable_tracks),
             "unavailable_tracks": unavailable_tracks,
             "new_alerts_count": len(newly_unavailable_alerts),
-            "version_count": version_num,
-            "version": version_num,
-            "prev_version": prev_version,
-            "diff": diff,
-            "added_count": len(diff["added"]),
-            "removed_count": len(diff["removed"]),
+            "snapshot_file": saved_path,
+            "version": len(snapshots_list),
+            "track_diff": track_diff,
         }
 
     def snapshot_all_playlists(
         self,
         alert_on_unavailable: bool = True,
-        notify: bool = True,
+        notify: bool = False,
         force_all_mail: bool = False,
     ) -> Dict[str, Any]:
-        """Iterate all user personal playlists, take snapshots of modified ones, and detect delisted tracks."""
-        if not self.playlist_service:
-            raise RuntimeError("An active Tidal session is required to snapshot playlists.")
+        """Snapshot all personal user playlists and optionally send email digests."""
+        if not self.provider:
+            raise RuntimeError("An active MusicProvider is required to snapshot playlists.")
 
-        user_playlists = self.playlist_service.list_playlists()
+        playlists = self.provider.get_user_playlists()
         results: List[Dict[str, Any]] = []
         total_alerts = 0
         total_snapshots_saved = 0
 
-        for pl_summary in user_playlists:
+        for pl in playlists:
             try:
-                res = self.snapshot_playlist(
-                    identifier=pl_summary["id"],
-                    alert_on_unavailable=alert_on_unavailable,
-                )
-                if res["snapshot_saved"]:
+                res = self.snapshot_playlist(pl.id, alert_on_unavailable=alert_on_unavailable)
+                if res.get("snapshot_file"):
                     total_snapshots_saved += 1
-                total_alerts += res["new_alerts_count"]
+                total_alerts += res.get("new_alerts_count", 0)
                 results.append(res)
             except Exception as e:
-                logger.error(f"Failed to snapshot playlist '{pl_summary.get('name')}': {e}", exc_info=True)
+                logger.error(f"Failed to snapshot playlist '{pl.name}': {e}")
                 results.append({
-                    "playlist_id": pl_summary["id"],
-                    "playlist_name": pl_summary.get("name", "Unknown"),
+                    "playlist_id": str(pl.id),
+                    "playlist_name": pl.name,
                     "error": str(e),
                 })
 
         batch_result = {
-            "playlists_scanned": len(user_playlists),
+            "playlists_scanned": len(playlists),
             "snapshots_saved": total_snapshots_saved,
             "total_alerts": total_alerts,
             "playlists": results,
@@ -394,11 +389,12 @@ class SnapshotService:
         notification_res = None
         if notify:
             try:
-                from tidal_cli.services.email_service import EmailService
+                from curo.services.email_service import EmailService
                 email_svc = EmailService(cfg=self.config)
                 notification_res = email_svc.send_digest_notification(
                     batch_results=batch_result,
                     force_all=force_all_mail,
+                    provider_name=self.provider.display_name,
                 )
             except Exception as e:
                 logger.error(f"Failed to dispatch email notification: {e}", exc_info=True)

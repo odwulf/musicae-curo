@@ -1,27 +1,26 @@
-"""Tests for SessionManager and credential handling."""
+"""Tests for TidalSessionManager and credential handling."""
 
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
 
-from tidal_cli.auth import AuthenticationError, SessionManager
-from tidal_cli.config import ConfigManager
+from curo.config import ConfigManager
+from curo.providers.tidal.session import TidalAuthenticationError, TidalSessionManager
 
 
 def test_load_session_missing_file(tmp_path: Path):
     cfg = ConfigManager(custom_config_dir=tmp_path)
-    mgr = SessionManager(cfg)
+    mgr = TidalSessionManager(cfg)
 
-    with pytest.raises(AuthenticationError, match="No session file found"):
+    with pytest.raises(TidalAuthenticationError, match="No session file found"):
         mgr.load_session()
 
 
 def test_save_and_load_valid_session(tmp_path: Path):
     cfg = ConfigManager(custom_config_dir=tmp_path)
-    mgr = SessionManager(cfg)
+    mgr = TidalSessionManager(cfg)
 
-    # Mock tidalapi.Session
     mock_session = MagicMock()
     mock_session.token_type = "Bearer"
     mock_session.session_id = "test-session-id"
@@ -33,8 +32,9 @@ def test_save_and_load_valid_session(tmp_path: Path):
 
     mgr.save_session(mock_session)
 
-    assert cfg.session_file.exists()
-    saved_data = json.loads(cfg.session_file.read_text(encoding="utf-8"))
+    session_file = cfg.get_provider_session_file("tidal")
+    assert session_file.exists()
+    saved_data = json.loads(session_file.read_text(encoding="utf-8"))
     assert saved_data["access_token"]["data"] == "valid-access-token"
 
     with patch("tidalapi.Session") as MockTidalSession:
@@ -54,9 +54,9 @@ def test_save_and_load_valid_session(tmp_path: Path):
 
 def test_silent_token_refresh_on_expired_session(tmp_path: Path):
     cfg = ConfigManager(custom_config_dir=tmp_path)
-    mgr = SessionManager(cfg)
+    mgr = TidalSessionManager(cfg)
+    session_file = cfg.get_provider_session_file("tidal")
 
-    # Write expired session file
     session_data = {
         "token_type": {"data": "Bearer"},
         "access_token": {"data": "expired-access-token"},
@@ -64,11 +64,10 @@ def test_silent_token_refresh_on_expired_session(tmp_path: Path):
         "is_pkce": {"data": True},
     }
     cfg.ensure_config_dir()
-    cfg.session_file.write_text(json.dumps(session_data), encoding="utf-8")
+    session_file.write_text(json.dumps(session_data), encoding="utf-8")
 
     with patch("tidalapi.Session") as MockTidalSession:
         inst = MockTidalSession.return_value
-        # Initial access token fails load_oauth_session
         inst.load_oauth_session.side_effect = [False, True]
         inst.check_login.return_value = True
         inst.token_refresh.return_value = True
@@ -86,12 +85,13 @@ def test_silent_token_refresh_on_expired_session(tmp_path: Path):
 
 def test_logout_removes_file(tmp_path: Path):
     cfg = ConfigManager(custom_config_dir=tmp_path)
-    mgr = SessionManager(cfg)
+    mgr = TidalSessionManager(cfg)
+    session_file = cfg.get_provider_session_file("tidal")
 
     cfg.ensure_config_dir()
-    cfg.session_file.write_text("{}", encoding="utf-8")
-    assert cfg.session_file.exists()
+    session_file.write_text("{}", encoding="utf-8")
+    assert session_file.exists()
 
     assert mgr.logout() is True
-    assert not cfg.session_file.exists()
+    assert not session_file.exists()
     assert mgr.logout() is False

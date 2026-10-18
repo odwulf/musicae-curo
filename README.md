@@ -1,100 +1,151 @@
-# Tidal CLI
+# Musicae Curo (`curo`)
 
-A schedulable command-line interface for TIDAL, tailored for automated Linux `cron` jobs, unconstrained dynamic mix discovery, and interactive playlist management.
+*Universal music library custodian, playlist protector, and daily discovery mix archiver.*
 
-📖 **[Full Documentation & Architecture Guide](DOCUMENTATION.md)**
+Musicae Curo (*Latin: "I care for music"*) is a modular, provider-agnostic music curation and playlist preservation CLI. Tailored for automated Linux `cron` background jobs and interactive terminal administration, it keeps your playlists healthy, archives ephemeral daily discovery mixes, versions personal playlists with SHA-256 change detection, repairs retired/delisted tracks, and dispatches change digests via email.
+
+📖 **[Full Documentation & Architecture Guide](DOCUMENTATION.md)** | 🤖 **[AI Agent Guide](AGENTS.md)**
+
+> [!NOTE]
+> ### Disclaimer & Project Origins
+> This project was created to fulfill a personal music curation need. All Python code and architecture in this repository has been generated with the assistance of an AI coding agent. The author does not claim to be a coder and makes this project publicly available as-is, in case someone else has similar music curation and playlist maintenance needs.
+
+---
 
 ## Key Features
-- **Dynamic Mix Discovery (Zero Assumptions)**: Automatically queries Tidal and discovers **any arbitrary count** of Daily Mixes (whether an account has 1, 3, 8, 12, or more) plus *My Daily Discovery*.
+
+- **Modular Multi-Provider Architecture**:
+  - Unified Provider Service Provider Interface (`MusicProvider` SPI).
+  - Dynamic adapter registry (`ProviderRegistry`) supporting runtime switching via `-p / --provider <name>`.
+  - **Tidal** adapter fully functional out of the box.
+  - Scaffolded adapters ready for **Deezer**, **Spotify**, **Qobuz**, and **YouTube Music**.
+- **Dynamic Mix Discovery**:
+  - Automatically queries and discovers Daily Mixes, plus *Daily Discovery*.
 - **Automated Daily Megamix & Archiving**:
-  - Deduplicates tracks across all discovered mixes using both Track IDs and ISRCs.
+  - Deduplicates tracks across all mixes using both Track IDs and ISRCs.
   - Generates dated snapshots (`Discovery Backup - YYYY-MM-DD`).
-  - Shuffles and aggregates into a single randomized `Daily Megamix` playlist.
-- **Headless Linux Server & Cron Optimization**:
-  - Device code authorization flow (`tidal-cli auth login`) for browserless servers.
-  - Strict POSIX security permissions (`0600` for `session.json`, `0700` for config directory).
-  - Silent token refresh transparently prevents expired authentication during unattended runs.
-- **Declarative Job Engine**: Define recurring cron tasks in `jobs.yaml` with built-in `job cron-help` syntax generator.
-- **Playlist & Album Export with Full Metadata**: Export any playlist or album with comprehensive container and track metadata (ISRC, duration, audio quality, BPM, key, gain, artists, release dates) to formatted JSON, M3U8, or CSV.
-- **Playlist Repair & Candidate Evaluation (Unavailable Track Replacement)**:
-  - Scans playlists for retired/unavailable tracks (`allow_streaming: false`).
-  - Tiered candidate search via ISRC, Album UPC barcode, and fuzzy metadata.
-  - Explainable scoring ($0.0 - 1.0$) with detailed human-readable reasoning strings.
-  - Severe penalties for Live/Acoustic mismatches (requiring manual approval).
-  - Defaults to 100% threshold & dry-run, generating diagnostic reports in `reports/` (git-ignored).
+  - Shuffles and aggregates into a randomized `Daily Megamix` playlist (`replace` or `append` modes).
+- **Playlist Versioning, SHA-256 Snapshots & Availability Alerting**:
+  - Tracks content changes using cryptographic SHA-256 hashes.
+  - Saves incremental versioned JSON backups only when modifications are detected.
+  - Builds a historical healthy track registry (`track_registry.json`) to retain ISRCs, album UPCs, and release dates even after songs are delisted by streaming platforms.
+  - Automatically records delisted tracks to `availability_alerts.log`.
+- **Intelligent Playlist Repair & Track Replacement**:
+  - Scans playlists for retired or unavailable tracks.
+  - Multi-tiered candidate discovery across ISRC sound codes, Album UPC barcodes, and normalized fuzzy metadata.
+  - Explainable 100-point scoring algorithm with detailed reasoning diagnostics.
+  - Severe acoustic/live version penalties with manual approval safeguards.
+  - Targeted track replacement by Track ID, 1-based position (`#4`), ISRC, or UPC.
+- **Email Notifications & Change Digests**:
+  - HTML & plain-text email digests sent whenever changes or unavailable tracks are detected.
+  - Baseline "All Playlists Overview" report sent automatically on initial setup or on demand (`--all`).
+  - Fully configurable SMTP settings including support for port 25, 587 (STARTTLS), or 465 (SSL).
+- **Headless Server & Cron Automation**:
+  - Browserless device code authorization flow (`curo auth login`).
+  - POSIX file security permissions (`0600` for session files, `0700` for config directories).
+  - Silent token refresh prevents auth expiration during unattended headless cron runs.
+  - Declarative job pipeline (`jobs.yaml`) with built-in crontab generator (`curo job cron-help`).
+
+---
 
 ## Installation
 
 ```bash
+# Clone the repository
+git clone https://github.com/odwulf/musicae-curo.git
+cd musicae-curo
+
+# Install dependencies and sync virtual environment
 uv sync
 ```
 
+---
+
 ## Quick Start
 
-### 1. Authenticate Once
+### 1. Authenticate Streaming Service
 ```bash
-uv run tidal-cli auth login
-```
-Visit the link provided in your browser or phone to approve the device. Check status with:
-```bash
-uv run tidal-cli auth status
+# Log in with Tidal (default provider)
+uv run curo auth login
+
+# Check authentication status
+uv run curo auth status
 ```
 
 ### 2. Discover Your Dynamic Mixes
 ```bash
-uv run tidal-cli mix list
+# List all active algorithmic mixes
+uv run curo mix list
+
+# Archive today's Daily Discovery mix
+uv run curo mix backup-discovery
+
+# Generate today's deduplicated, randomized Megamix
+uv run curo mix megamix
 ```
 
-uv run tidal-cli mix megamix
-```
-
-### 4. Backup & Snapshot Playlists (Versioning & Alerts)
+### 3. Backup & Snapshot Playlists (Versioning & Alerts)
 ```bash
-# Versioned backup of all playlists with SHA-256 change detection
-uv run tidal-cli playlist snapshot
+# Create SHA-256 versioned snapshot of all playlists (saves only if changed)
+uv run curo playlist snapshot
 
-# View delisted/unavailable track alerts
-uv run tidal-cli playlist alerts
+# Snapshot a specific playlist
+uv run curo playlist snapshot "My Favorites"
+
+# View logged unavailable / delisted track alerts
+uv run curo playlist alerts
 ```
 
-### 5. Repair Unavailable Tracks in Playlists
+### 4. Repair or Replace Unavailable Playlist Tracks
 ```bash
-# Dry-run analysis with 80% threshold and historical ISRC recovery
-uv run tidal-cli playlist repair "My Playlist"
+# Dry-run diagnostic repair report with candidate scoring
+uv run curo playlist repair "My Favorites"
 
-# Live replacement on Tidal
-uv run tidal-cli playlist repair "My Playlist" --live
+# Mutate and apply replacements live on the streaming service
+uv run curo playlist repair "My Favorites" --live
 
-# Replace a specific track manually by ID, index, ISRC, or album UPC
-uv run tidal-cli playlist replace "My Playlist" --track "#4" --with GBCEE0700017 --live
+# Replace a specific track by 1-based playlist index and ISRC
+uv run curo playlist replace "My Favorites" --track "#4" --with USSM18200001 --live
 ```
 
-### 6. Email Notifications (Daily Change Digest & Baseline)
+### 5. Email Notifications (Daily Change Digest & Baseline)
 ```bash
 # Configure SMTP credentials (e.g. port 25 with STARTTLS)
-uv run tidal-cli notify config --host mail.myserver.org --port 25 --tls --user me@myserver.org --password mypass --to-addr me@myserver.org
+uv run curo notify config --host mail.myserver.org --port 25 --tls --user me@myserver.org --password secret --to-addr me@myserver.org
 
-# Verify SMTP setup
-uv run tidal-cli notify test
+# Verify SMTP connectivity
+uv run curo notify test
 
-# Send baseline all-playlists email
-uv run tidal-cli notify send --all
+# Dispatch baseline all-playlists email overview
+uv run curo notify send --all
 ```
 
-### 7. Setup Linux Server Cron Job
-Get the exact crontab line for your server:
+### 6. Streaming Providers
 ```bash
-uv run tidal-cli job cron-help
+# List available and active provider adapters
+uv run curo provider list
+
+# Switch default provider
+uv run curo provider default tidal
 ```
-Add it to your crontab:
+
+### 7. Headless Linux Server Cron Setup
 ```bash
+# Generate the exact crontab syntax for your server
+uv run curo job cron-help
+
+# Edit crontab
 crontab -e
 ```
 
+---
+
 ## Running Tests
+
+Musicae Curo maintains an extensive test suite covering all providers, domain services, scoring logic, and CLI commands:
 
 ```bash
 uv run pytest -v
 ```
 
-See [DOCUMENTATION.md](DOCUMENTATION.md) for detailed CLI commands, cron configuration, and extension guides.
+See [DOCUMENTATION.md](DOCUMENTATION.md) for full architecture details, provider extension guides, and API documentation.

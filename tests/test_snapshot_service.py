@@ -9,11 +9,12 @@ from unittest.mock import MagicMock
 import pytest
 from typer.testing import CliRunner
 
-from tidal_cli.cli import app, state
-from tidal_cli.config import ConfigManager
-from tidal_cli.services.candidate_finder import CandidateFinder
-from tidal_cli.services.job_runner import JobRunner
-from tidal_cli.services.snapshot_service import SnapshotService
+from curo.cli import app, state
+from curo.config import ConfigManager
+from curo.providers.tidal import TidalProvider
+from curo.services.candidate_finder import CandidateFinder
+from curo.services.job_runner import JobRunner
+from curo.services.snapshot_service import SnapshotService
 
 
 @pytest.fixture
@@ -23,7 +24,7 @@ def temp_config(tmp_path: Path) -> ConfigManager:
 
 
 def test_track_registry_and_historical_recovery(temp_config: ConfigManager):
-    service = SnapshotService(session=None, cfg=temp_config)
+    service = SnapshotService(provider=None, cfg=temp_config)
 
     # 1. Available track with full identifiers
     track1 = MagicMock(id=101, isrc="USSM18200001", available=True, allow_streaming=True, stream_ready=True)
@@ -71,7 +72,8 @@ def test_snapshot_versioning_and_deduplication(temp_config: ConfigManager):
     session.user.playlists.return_value = [mock_pl]
     session.playlist.return_value = mock_pl
 
-    service = SnapshotService(session=session, cfg=temp_config)
+    provider = TidalProvider(session=session, cfg=temp_config)
+    service = SnapshotService(provider=provider, cfg=temp_config)
 
     # First snapshot: should create version 1
     res1 = service.snapshot_playlist("pl-001")
@@ -121,7 +123,8 @@ def test_availability_alerting_when_track_delisted(temp_config: ConfigManager):
     session.user.playlists.return_value = [mock_pl]
     session.playlist.return_value = mock_pl
 
-    service = SnapshotService(session=session, cfg=temp_config)
+    provider = TidalProvider(session=session, cfg=temp_config)
+    service = SnapshotService(provider=provider, cfg=temp_config)
     res1 = service.snapshot_playlist("pl-002")
     assert res1["new_alerts_count"] == 0
 
@@ -140,14 +143,15 @@ def test_availability_alerting_when_track_delisted(temp_config: ConfigManager):
 
     alerts = service.get_recent_alerts(limit=10)
     assert len(alerts) >= 1
-    assert alerts[0]["track_id"] == 50
+    assert str(alerts[0]["track_id"]) == "50"
     assert alerts[0]["track_title"] == "Active Song"
     assert alerts[0]["playlist_name"] == "Daily Favorites"
 
 
 def test_candidate_finder_recovers_historical_isrc(temp_config: ConfigManager):
     session = MagicMock()
-    snapshot_svc = SnapshotService(session=session, cfg=temp_config)
+    provider = TidalProvider(session=session, cfg=temp_config)
+    snapshot_svc = SnapshotService(provider=provider, cfg=temp_config)
 
     # 1. Register healthy track in historical registry
     healthy_track = MagicMock(id=300, isrc="FRUM71800123", duration=240, available=True, allow_streaming=True, stream_ready=True)
@@ -179,12 +183,12 @@ def test_candidate_finder_recovers_historical_isrc(temp_config: ConfigManager):
     session.get_albums_by_barcode.return_value = []
     session.search.return_value = {"tracks": []}
 
-    finder = CandidateFinder(session, snapshot_service=snapshot_svc)
+    finder = CandidateFinder(provider, snapshot_service=snapshot_svc)
     candidates = finder.find_candidates(unavail_track)
 
     assert len(candidates) >= 1
     best = candidates[0]
-    assert best.candidate.id == 301
+    assert str(best.candidate.id) == "301"
     assert best.isrc_match is True
     # With historical ISRC matched, score should be >= 0.90
     assert best.score >= 0.90
@@ -208,10 +212,10 @@ def test_job_runner_snapshot_actions(temp_config: ConfigManager, monkeypatch):
     session.user.playlists.return_value = [mock_pl]
     session.playlist.return_value = mock_pl
 
-    # Mock SessionManager.load_session
-    monkeypatch.setattr("tidal_cli.services.job_runner.SessionManager.load_session", lambda self, auto_refresh=True: session)
+    provider = TidalProvider(session=session, cfg=temp_config)
+    monkeypatch.setattr("curo.services.job_runner.ProviderRegistry.create_provider", lambda *args, **kwargs: provider)
 
-    runner = JobRunner(cfg=temp_config)
+    runner = JobRunner(provider=provider, cfg=temp_config)
     res = runner.run_job("daily-playlist-backup")
 
     assert res["success"] is True
@@ -239,7 +243,8 @@ def test_cli_playlist_snapshot_and_alerts(temp_config: ConfigManager, monkeypatc
     session.user.playlists.return_value = [mock_pl]
     session.playlist.return_value = mock_pl
 
-    monkeypatch.setattr("tidal_cli.cli.SessionManager.load_session", lambda self: session)
+    provider = TidalProvider(session=session, cfg=temp_config)
+    monkeypatch.setattr("curo.cli.get_active_provider", lambda *args, **kwargs: provider)
     monkeypatch.setitem(state, "config", temp_config)
 
     cli_runner = CliRunner()

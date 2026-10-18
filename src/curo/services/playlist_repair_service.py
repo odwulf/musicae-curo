@@ -9,20 +9,18 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-import tidalapi
-from tidalapi.media import Track
-from tidalapi.playlist import UserPlaylist
-
-from tidal_cli.config import ConfigManager, config_manager
-from tidal_cli.services.candidate_finder import CandidateFinder
-from tidal_cli.services.playlist_service import PlaylistService
-from tidal_cli.services.similarity_scorer import (
+from curo.config import ConfigManager, config_manager
+from curo.core.models import Track
+from curo.core.provider import MusicProvider
+from curo.services.candidate_finder import CandidateFinder
+from curo.services.playlist_service import PlaylistService
+from curo.services.similarity_scorer import (
     CandidateEvaluation,
     _clean_str,
     _is_mock,
     evaluate_candidate,
 )
-from tidal_cli.services.track_matcher import is_track_available
+from curo.services.track_matcher import is_track_available
 
 logger = logging.getLogger(__name__)
 
@@ -38,16 +36,16 @@ class PlaylistRepairService:
 
     def __init__(
         self,
-        session: tidalapi.Session,
+        provider: MusicProvider,
         project_root: Optional[Path] = None,
         cfg: Optional[ConfigManager] = None,
     ) -> None:
-        self.session = session
+        self.provider = provider
         self.config = cfg or config_manager
-        self.playlist_service = PlaylistService(session)
-        from tidal_cli.services.snapshot_service import SnapshotService
-        self.snapshot_service = SnapshotService(session, cfg=self.config)
-        self.candidate_finder = CandidateFinder(session, snapshot_service=self.snapshot_service)
+        self.playlist_service = PlaylistService(provider)
+        from curo.services.snapshot_service import SnapshotService
+        self.snapshot_service = SnapshotService(provider, cfg=self.config)
+        self.candidate_finder = CandidateFinder(provider, snapshot_service=self.snapshot_service)
         self.project_root = project_root or Path.cwd()
 
     def analyze_and_repair(
@@ -67,11 +65,13 @@ class PlaylistRepairService:
         if not playlist:
             raise ValueError(f"Playlist not found: {identifier}")
 
-        tracks = playlist.tracks()
+        pl_id = str(getattr(playlist, "id", identifier))
+        pl_name = getattr(playlist, "title", None) or getattr(playlist, "name", "Playlist")
+        tracks = self.provider.get_playlist_tracks(pl_id)
         unavailable_reports: List[Dict[str, Any]] = []
         replacements_applied = 0
 
-        logger.info(f"Analyzing {len(tracks)} tracks in playlist '{playlist.name}'...")
+        logger.info(f"Analyzing {len(tracks)} tracks in playlist '{pl_name}'...")
 
         for idx, t in enumerate(tracks):
             available = is_track_available(t)
@@ -92,17 +92,20 @@ class PlaylistRepairService:
             elif available and not all_tracks:
                 continue
 
-            orig_artist = getattr(getattr(t, "artist", None), "name", "Unknown Artist")
-            orig_album = getattr(getattr(t, "album", None), "name", "Unknown Album")
-            orig_upc = getattr(getattr(t, "album", None), "upc", None)
+            orig_artist = _clean_str(getattr(getattr(t, "artist", None), "name", None)) or "Unknown Artist"
+            orig_album = (
+                _clean_str(getattr(getattr(t, "album", None), "name", None))
+                or _clean_str(getattr(getattr(t, "album", None), "title", None))
+                or "Unknown Album"
+            )
+            orig_upc = _clean_str(getattr(getattr(t, "album", None), "upc", None))
             raw_orig_date = getattr(getattr(t, "album", None), "release_date", None)
             orig_release_date = (
                 raw_orig_date.isoformat()
                 if isinstance(raw_orig_date, (datetime.datetime, datetime.date))
-                else (str(raw_orig_date) if raw_orig_date and not hasattr(raw_orig_date, "_mock_return_value") else None)
+                else (str(raw_orig_date) if raw_orig_date and not _is_mock(raw_orig_date) else None)
             )
 
-            # Check if any missing metadata can be recovered from historical snapshots
             hist = None
             if self.snapshot_service and getattr(t, "id", None) is not None:
                 try:
@@ -110,7 +113,7 @@ class PlaylistRepairService:
                 except Exception:
                     hist = None
 
-            orig_isrc = getattr(t, "isrc", None) or (hist.get("isrc") if hist else None)
+            orig_isrc = _clean_str(getattr(t, "isrc", None)) or (hist.get("isrc") if hist else None)
             recovered_isrc = bool(not getattr(t, "isrc", None) and hist and hist.get("isrc"))
             recovered_upc = bool(not orig_upc and hist and hist.get("album_upc"))
             if recovered_upc:
@@ -129,12 +132,11 @@ class PlaylistRepairService:
                     )
                     candidates = [eval_result]
                 except Exception as e:
-                    logger.error(f"Failed to resolve candidate for track #{idx} '{t.name}': {e}")
+                    logger.error(f"Failed to resolve candidate for track #{idx} '{getattr(t, 'name', '')}': {e}")
                     candidates = []
             else:
                 candidates = self.candidate_finder.find_candidates(t, max_candidates=10)
 
-            # Mark candidates against threshold
             cand_dicts = []
             best_candidate_dict = None
 
@@ -146,15 +148,20 @@ class PlaylistRepairService:
             if cand_dicts:
                 best_candidate_dict = cand_dicts[0]
 
+            t_title = _clean_str(getattr(t, "name", None)) or _clean_str(getattr(t, "title", "")) or ""
+            t_dur = getattr(t, "duration_seconds", None) or getattr(t, "duration", None)
+            if _is_mock(t_dur):
+                t_dur = None
+
             track_entry = {
                 "index_in_playlist": idx,
                 "original_track": {
-                    "id": t.id,
-                    "title": getattr(t, "name", ""),
+                    "id": getattr(t, "id", None) if not _is_mock(getattr(t, "id", None)) else None,
+                    "title": t_title,
                     "artist": orig_artist,
                     "album": orig_album,
                     "album_release_date": orig_release_date,
-                    "duration_seconds": getattr(t, "duration", None),
+                    "duration_seconds": t_dur,
                     "isrc": orig_isrc,
                     "recovered_isrc": recovered_isrc,
                     "album_upc": orig_upc,
@@ -167,7 +174,6 @@ class PlaylistRepairService:
                 "replacement_status": "pending",
             }
 
-            # Check if candidate qualifies for replacement
             can_replace = False
             if best_candidate_dict and best_candidate_dict["meets_threshold"]:
                 if best_candidate_dict["requires_manual_approval"]:
@@ -176,19 +182,17 @@ class PlaylistRepairService:
                     can_replace = True
 
             if can_replace:
-                if not dry_run and isinstance(playlist, UserPlaylist):
+                if not dry_run:
                     try:
                         new_track_id = str(best_candidate_dict["id"])
-                        # Add substitute at position with allow_duplicates=True
-                        added = playlist.add([new_track_id], position=idx, allow_duplicates=True)
+                        added = self.provider.add_tracks_to_playlist(pl_id, [new_track_id], position=idx)
                         if not added:
                             logger.error(
-                                f"Tidal API did not add candidate ID {new_track_id} for track #{idx} '{t.name}'"
+                                f"Provider did not add candidate ID {new_track_id} for track #{idx} '{t_title}'"
                             )
-                            track_entry["replacement_status"] = "error: tidal_skipped_add"
+                            track_entry["replacement_status"] = "error: provider_skipped_add"
                         else:
-                            # Remove old track at shifted index
-                            removed = playlist.remove_by_index(idx + 1)
+                            removed = self.provider.remove_track_from_playlist_by_index(pl_id, idx + 1)
                             if not removed:
                                 logger.error(f"Failed to remove old track at index {idx+1}")
                                 track_entry["replacement_status"] = "error: failed_to_remove_old_track"
@@ -196,7 +200,7 @@ class PlaylistRepairService:
                                 track_entry["replacement_status"] = "replaced"
                                 replacements_applied += 1
                                 logger.info(
-                                    f"Replaced track #{idx} '{t.name}' with candidate ID {new_track_id} (Score: {best_candidate_dict['similarity_score']})"
+                                    f"Replaced track #{idx} '{t_title}' with candidate ID {new_track_id} (Score: {best_candidate_dict['similarity_score']})"
                                 )
                     except Exception as e:
                         logger.error(f"Failed to replace track #{idx}: {e}")
@@ -208,12 +212,12 @@ class PlaylistRepairService:
 
             unavailable_reports.append(track_entry)
 
-        # Build full report
         timestamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
         report = {
             "report_generated_at": timestamp,
-            "playlist_id": str(playlist.id),
-            "playlist_name": playlist.name,
+            "provider": self.provider.name,
+            "playlist_id": pl_id,
+            "playlist_name": pl_name,
             "total_tracks": len(tracks),
             "unavailable_tracks_count": len(unavailable_reports),
             "threshold_configured": threshold,
@@ -222,13 +226,12 @@ class PlaylistRepairService:
             "unavailable_tracks": unavailable_reports,
         }
 
-        # Determine export file path
         if export_path:
             out_file = Path(export_path)
         else:
             reports_dir = self.project_root / "reports"
             reports_dir.mkdir(parents=True, exist_ok=True)
-            slug = _slugify(playlist.name)
+            slug = _slugify(pl_name)
             date_tag = datetime.date.today().isoformat()
             out_file = reports_dir / f"repair_{slug}_{date_tag}.json"
 
@@ -241,11 +244,11 @@ class PlaylistRepairService:
 
     def resolve_replacement_track(
         self,
-        original_track: Track,
+        original_track: Any,
         replacement: Optional[Union[str, int]] = None,
         isrc: Optional[str] = None,
         upc: Optional[str] = None,
-    ) -> tuple[Track, str, CandidateEvaluation]:
+    ) -> tuple[Any, str, CandidateEvaluation]:
         """Resolve a candidate replacement Track object from a track ID, ISRC, or UPC."""
         # 1. Check if explicit ISRC is provided or if replacement matches ISRC format
         isrc_to_search = isrc.strip() if isrc else None
@@ -257,7 +260,7 @@ class PlaylistRepairService:
         if isrc_to_search:
             method = f"isrc ({isrc_to_search})"
             try:
-                tracks = self.session.get_tracks_by_isrc(isrc_to_search)
+                tracks = self.provider.get_tracks_by_isrc(isrc_to_search)
                 available = [t for t in (tracks or []) if is_track_available(t)]
                 evals = [
                     evaluate_candidate(original_track, t, original_isrc=isrc_to_search)
@@ -279,11 +282,17 @@ class PlaylistRepairService:
         if upc_to_search:
             method = f"upc ({upc_to_search})"
             try:
-                albums = self.session.get_albums_by_barcode(upc_to_search)
+                albums = self.provider.get_albums_by_barcode(upc_to_search)
                 evals = []
                 for alb in albums or []:
                     alb_upc = getattr(alb, "upc", upc_to_search)
-                    for t in alb.tracks():
+                    alb_id = getattr(alb, "id", None)
+                    tracks = (
+                        self.provider.get_album_tracks(str(alb_id))
+                        if alb_id
+                        else (alb.tracks() if hasattr(alb, "tracks") else [])
+                    )
+                    for t in tracks or []:
                         if is_track_available(t):
                             evals.append(
                                 evaluate_candidate(
@@ -304,12 +313,12 @@ class PlaylistRepairService:
         if replacement and not isrc_to_search and not upc_to_search:
             rep_clean = str(replacement).strip()
             if rep_clean.isdigit():
-                track_id_to_fetch = int(rep_clean)
+                track_id_to_fetch = rep_clean
 
         if track_id_to_fetch is not None:
             method = f"track_id ({track_id_to_fetch})"
             try:
-                cand_track = self.session.track(track_id_to_fetch)
+                cand_track = self.provider.get_track(track_id_to_fetch)
                 if cand_track:
                     eval_res = evaluate_candidate(original_track, cand_track)
                     return cand_track, method, eval_res
@@ -335,20 +344,20 @@ class PlaylistRepairService:
         if not playlist:
             raise ValueError(f"Playlist not found: {playlist_identifier}")
 
-        tracks = playlist.tracks()
+        pl_id = str(getattr(playlist, "id", playlist_identifier))
+        pl_name = getattr(playlist, "title", None) or getattr(playlist, "name", "Playlist")
+        tracks = self.provider.get_playlist_tracks(pl_id)
         target_str = str(target).strip()
 
         target_idx = None
         target_track = None
 
-        # Try matching by track ID first
         for i, t in enumerate(tracks):
             if str(getattr(t, "id", "")) == target_str:
                 target_idx = i
                 target_track = t
                 break
 
-        # If not found by track ID, check if target is an index (e.g. "4", "#5")
         if target_idx is None:
             clean_idx_str = target_str.lstrip("#")
             if clean_idx_str.isdigit():
@@ -362,7 +371,7 @@ class PlaylistRepairService:
 
         if target_track is None or target_idx is None:
             raise ValueError(
-                f"Track '{target}' not found in playlist '{playlist.name}' (contains {len(tracks)} tracks)."
+                f"Track '{target}' not found in playlist '{pl_name}' (contains {len(tracks)} tracks)."
             )
 
         cand_track, method, eval_result = self.resolve_replacement_track(
@@ -373,31 +382,40 @@ class PlaylistRepairService:
         )
 
         orig_artist = _clean_str(getattr(getattr(target_track, "artist", None), "name", None)) or "Unknown Artist"
-        orig_album = _clean_str(getattr(getattr(target_track, "album", None), "name", None)) or "Unknown Album"
+        orig_album = (
+            _clean_str(getattr(getattr(target_track, "album", None), "name", None))
+            or _clean_str(getattr(getattr(target_track, "album", None), "title", None))
+            or "Unknown Album"
+        )
         orig_isrc = _clean_str(getattr(target_track, "isrc", None))
         orig_upc = _clean_str(getattr(getattr(target_track, "album", None), "upc", None))
-        orig_dur = getattr(target_track, "duration", None)
+        orig_dur = getattr(target_track, "duration_seconds", None) or getattr(target_track, "duration", None)
         if _is_mock(orig_dur):
             orig_dur = None
 
         cand_artist = _clean_str(getattr(getattr(cand_track, "artist", None), "name", None)) or "Unknown Artist"
-        cand_album = _clean_str(getattr(getattr(cand_track, "album", None), "name", None)) or "Unknown Album"
+        cand_album = (
+            _clean_str(getattr(getattr(cand_track, "album", None), "name", None))
+            or _clean_str(getattr(getattr(cand_track, "album", None), "title", None))
+            or "Unknown Album"
+        )
         cand_isrc = _clean_str(getattr(cand_track, "isrc", None))
         cand_upc = _clean_str(getattr(getattr(cand_track, "album", None), "upc", None))
-        cand_dur = getattr(cand_track, "duration", None)
+        cand_dur = getattr(cand_track, "duration_seconds", None) or getattr(cand_track, "duration", None)
         if _is_mock(cand_dur):
             cand_dur = None
 
         res_dict = {
-            "playlist_id": str(playlist.id),
-            "playlist_name": str(playlist.name),
+            "provider": self.provider.name,
+            "playlist_id": pl_id,
+            "playlist_name": pl_name,
             "index_in_playlist": target_idx,
             "position": target_idx + 1,
             "resolution_method": method,
             "dry_run": dry_run,
             "original_track": {
-                "id": target_track.id if not _is_mock(target_track.id) else None,
-                "title": _clean_str(getattr(target_track, "name", None)) or "",
+                "id": getattr(target_track, "id", None) if not _is_mock(getattr(target_track, "id", None)) else None,
+                "title": _clean_str(getattr(target_track, "name", None)) or _clean_str(getattr(target_track, "title", None)) or "",
                 "artist": orig_artist,
                 "album": orig_album,
                 "duration_seconds": orig_dur,
@@ -406,8 +424,8 @@ class PlaylistRepairService:
                 "available": is_track_available(target_track),
             },
             "replacement_track": {
-                "id": cand_track.id if not _is_mock(cand_track.id) else None,
-                "title": _clean_str(getattr(cand_track, "name", None)) or "",
+                "id": getattr(cand_track, "id", None) if not _is_mock(getattr(cand_track, "id", None)) else None,
+                "title": _clean_str(getattr(cand_track, "name", None)) or _clean_str(getattr(cand_track, "title", None)) or "",
                 "artist": cand_artist,
                 "album": cand_album,
                 "duration_seconds": cand_dur,
@@ -420,19 +438,19 @@ class PlaylistRepairService:
             "status": "simulated" if dry_run else "pending",
         }
 
-        if not dry_run and isinstance(playlist, UserPlaylist):
+        if not dry_run:
             try:
                 new_id = str(cand_track.id)
-                added = playlist.add([new_id], position=target_idx, allow_duplicates=True)
+                added = self.provider.add_tracks_to_playlist(pl_id, [new_id], position=target_idx)
                 if not added:
-                    res_dict["status"] = "error: tidal_skipped_add"
+                    res_dict["status"] = "error: provider_skipped_add"
                 else:
-                    removed = playlist.remove_by_index(target_idx + 1)
+                    removed = self.provider.remove_track_from_playlist_by_index(pl_id, target_idx + 1)
                     if not removed:
                         res_dict["status"] = "error: failed_to_remove_old_track"
                     else:
                         res_dict["status"] = "replaced"
-                        slug = _slugify(playlist.name)
+                        slug = _slugify(pl_name)
                         self.snapshot_service.update_track_registry([cand_track], slug)
             except Exception as e:
                 res_dict["status"] = f"error: {e}"

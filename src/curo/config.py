@@ -1,4 +1,4 @@
-"""Configuration and path management for tidal-cli."""
+"""Configuration and path management for Musicae Curo (curo)."""
 
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 
-DEFAULT_JOBS_YAML = """# tidal-cli automated job definitions
-# Schedulable via cron: e.g. run at 06:00 UTC daily:
-# 0 6 * * * /path/to/tidal-cli job run daily-discovery-megamix --quiet
+DEFAULT_JOBS_YAML = """# Musicae Curo (curo) automated job definitions
+# Schedulable via cron: e.g. run daily at 06:00 UTC:
+# 0 6 * * * /path/to/curo job run daily-discovery-megamix --quiet
 
 jobs:
   daily-discovery-megamix:
@@ -21,7 +21,7 @@ jobs:
       - action: backup_daily_discovery
         params:
           playlist_name_format: "Discovery Backup - {date}"
-          description: "Automated daily backup of Tidal Daily Discovery"
+          description: "Automated daily backup of Daily Discovery"
       - action: create_megamix
         params:
           target_playlist: "Daily Megamix"
@@ -45,13 +45,13 @@ class AppSettings(BaseModel):
     """General application settings."""
     log_level: str = Field(default="INFO")
     timeout_seconds: int = Field(default=30)
-    chunk_size: int = Field(default=50)  # max tracks per add_tracks API call
+    chunk_size: int = Field(default=50)
 
 
 class EmailConfig(BaseModel):
     """SMTP email notification settings."""
     smtp_host: Optional[str] = Field(default=None, description="SMTP server host (e.g. smtp.gmail.com)")
-    smtp_port: int = Field(default=587, description="SMTP server port (e.g. 587 for STARTTLS, 465 for SSL)")
+    smtp_port: int = Field(default=587, description="SMTP server port (e.g. 587 for STARTTLS, 465 for SSL, 25 for local TLS)")
     smtp_user: Optional[str] = Field(default=None, description="Username for SMTP authentication")
     smtp_password: Optional[str] = Field(default=None, description="Password for SMTP authentication")
     use_tls: bool = Field(default=True, description="Enable STARTTLS encryption")
@@ -63,30 +63,39 @@ class EmailConfig(BaseModel):
 
     @property
     def is_configured(self) -> bool:
-        """Returns True if the minimum required SMTP fields are configured."""
+        """Returns True if minimum required SMTP fields are configured."""
         return bool(self.smtp_host and self.to_address)
 
 
 class ConfigManager:
-    """Manages paths, directory permissions, and configuration files."""
+    """Manages paths, directory permissions, provider configurations, and settings."""
 
     def __init__(self, custom_config_dir: Optional[Path | str] = None) -> None:
         if custom_config_dir:
             self.config_dir = Path(custom_config_dir).expanduser().resolve()
-        elif "TIDAL_CONFIG_DIR" in os.environ:
-            self.config_dir = Path(os.environ["TIDAL_CONFIG_DIR"]).expanduser().resolve()
+        elif "CURO_CONFIG_DIR" in os.environ:
+            self.config_dir = Path(os.environ["CURO_CONFIG_DIR"]).expanduser().resolve()
         else:
-            self.config_dir = Path.home() / ".config" / "tidal-cli"
+            self.config_dir = Path.home() / ".config" / "curo"
 
-        self.session_file = self.config_dir / "session.json"
         self.config_file = self.config_dir / "config.json"
         self.jobs_file = self.config_dir / "jobs.yaml"
-        self.log_file = self.config_dir / "tidal-cli.log"
+        self.log_file = self.config_dir / "curo.log"
         self.snapshots_dir = self.config_dir / "snapshots"
         self.track_registry_file = self.snapshots_dir / "index.json"
         self.logs_dir = self.config_dir / "logs"
         self.alerts_log_file = self.logs_dir / "availability_alerts.log"
         self.notification_state_file = self.config_dir / "notification_state.json"
+
+    def get_provider_session_file(self, provider_name: str) -> Path:
+        """Return the path to the session credentials file for a specific provider."""
+        return self.config_dir / f"{provider_name.lower()}_session.json"
+
+    def get_provider_snapshots_dir(self, provider_name: str) -> Path:
+        """Return the snapshot storage directory for a specific provider."""
+        p_dir = self.snapshots_dir / provider_name.lower()
+        p_dir.mkdir(parents=True, exist_ok=True)
+        return p_dir
 
     def ensure_config_dir(self) -> Path:
         """Create config directory with strict permissions on POSIX systems."""
@@ -109,62 +118,86 @@ class ConfigManager:
                 pass
 
     def ensure_jobs_file(self) -> Path:
-        """Create a default jobs.yaml if it does not exist."""
+        """Create default jobs.yaml if it does not exist."""
         self.ensure_config_dir()
         if not self.jobs_file.exists():
             self.jobs_file.write_text(DEFAULT_JOBS_YAML, encoding="utf-8")
             self.secure_file(self.jobs_file)
         return self.jobs_file
 
-    def get_email_config(self) -> EmailConfig:
-        """Load email notification config from config.json and environment variables."""
-        cfg_dict: Dict[str, Any] = {}
+    def get_default_provider(self) -> str:
+        """Return the default active provider name."""
+        if "CURO_PROVIDER" in os.environ:
+            return os.environ["CURO_PROVIDER"].lower()
         if self.config_file.exists():
             try:
                 with open(self.config_file, "r", encoding="utf-8") as f:
                     data = json.load(f) or {}
-                    cfg_dict = data.get("email") or data.get("smtp") or {}
+                    if data.get("default_provider"):
+                        return data["default_provider"].lower()
             except Exception:
-                cfg_dict = {}
-
-        # Environment variable overrides
-        if "TIDAL_SMTP_HOST" in os.environ:
-            cfg_dict["smtp_host"] = os.environ["TIDAL_SMTP_HOST"]
-        if "TIDAL_SMTP_PORT" in os.environ:
-            try:
-                cfg_dict["smtp_port"] = int(os.environ["TIDAL_SMTP_PORT"])
-            except ValueError:
                 pass
-        if "TIDAL_SMTP_USER" in os.environ:
-            cfg_dict["smtp_user"] = os.environ["TIDAL_SMTP_USER"]
-        if "TIDAL_SMTP_PASSWORD" in os.environ:
-            cfg_dict["smtp_password"] = os.environ["TIDAL_SMTP_PASSWORD"]
-        if "TIDAL_SMTP_TLS" in os.environ:
-            cfg_dict["use_tls"] = os.environ["TIDAL_SMTP_TLS"].lower() in ("1", "true", "yes")
-        if "TIDAL_SMTP_SSL" in os.environ:
-            cfg_dict["use_ssl"] = os.environ["TIDAL_SMTP_SSL"].lower() in ("1", "true", "yes")
-        if "TIDAL_EMAIL_FROM" in os.environ:
-            cfg_dict["from_address"] = os.environ["TIDAL_EMAIL_FROM"]
-        if "TIDAL_EMAIL_TO" in os.environ:
-            cfg_dict["to_address"] = os.environ["TIDAL_EMAIL_TO"]
+        return "tidal"
+
+    def set_default_provider(self, provider_name: str) -> None:
+        """Set and persist the default active provider name."""
+        self.ensure_config_dir()
+        data = self.load_raw_config()
+        data["default_provider"] = provider_name.lower()
+        self.save_raw_config(data)
+
+    def load_raw_config(self) -> Dict[str, Any]:
+        """Load raw json config dictionary."""
+        if self.config_file.exists():
+            try:
+                with open(self.config_file, "r", encoding="utf-8") as f:
+                    return json.load(f) or {}
+            except Exception:
+                return {}
+        return {}
+
+    def save_raw_config(self, data: Dict[str, Any]) -> None:
+        """Save raw json config dictionary securely."""
+        self.ensure_config_dir()
+        with open(self.config_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        self.secure_file(self.config_file)
+
+    def get_email_config(self) -> EmailConfig:
+        """Load email notification config from config.json and environment variables."""
+        cfg_dict: Dict[str, Any] = {}
+        raw = self.load_raw_config()
+        cfg_dict = raw.get("email") or raw.get("smtp") or {}
+
+        # Environment variable overrides (CURO_SMTP_* or legacy fallback)
+        for env_prefix in ("CURO_", "TIDAL_"):
+            if f"{env_prefix}SMTP_HOST" in os.environ:
+                cfg_dict["smtp_host"] = os.environ[f"{env_prefix}SMTP_HOST"]
+            if f"{env_prefix}SMTP_PORT" in os.environ:
+                try:
+                    cfg_dict["smtp_port"] = int(os.environ[f"{env_prefix}SMTP_PORT"])
+                except ValueError:
+                    pass
+            if f"{env_prefix}SMTP_USER" in os.environ:
+                cfg_dict["smtp_user"] = os.environ[f"{env_prefix}SMTP_USER"]
+            if f"{env_prefix}SMTP_PASSWORD" in os.environ:
+                cfg_dict["smtp_password"] = os.environ[f"{env_prefix}SMTP_PASSWORD"]
+            if f"{env_prefix}SMTP_TLS" in os.environ:
+                cfg_dict["use_tls"] = os.environ[f"{env_prefix}SMTP_TLS"].lower() in ("1", "true", "yes")
+            if f"{env_prefix}SMTP_SSL" in os.environ:
+                cfg_dict["use_ssl"] = os.environ[f"{env_prefix}SMTP_SSL"].lower() in ("1", "true", "yes")
+            if f"{env_prefix}EMAIL_FROM" in os.environ:
+                cfg_dict["from_address"] = os.environ[f"{env_prefix}EMAIL_FROM"]
+            if f"{env_prefix}EMAIL_TO" in os.environ:
+                cfg_dict["to_address"] = os.environ[f"{env_prefix}EMAIL_TO"]
 
         return EmailConfig(**cfg_dict)
 
     def save_email_config(self, email_cfg: EmailConfig) -> None:
         """Persist email configuration to config.json with secure file permissions."""
-        self.ensure_config_dir()
-        existing_data: Dict[str, Any] = {}
-        if self.config_file.exists():
-            try:
-                with open(self.config_file, "r", encoding="utf-8") as f:
-                    existing_data = json.load(f) or {}
-            except Exception:
-                existing_data = {}
-
-        existing_data["email"] = email_cfg.model_dump(exclude_none=True)
-        with open(self.config_file, "w", encoding="utf-8") as f:
-            json.dump(existing_data, f, indent=2, ensure_ascii=False)
-        self.secure_file(self.config_file)
+        data = self.load_raw_config()
+        data["email"] = email_cfg.model_dump(exclude_none=True)
+        self.save_raw_config(data)
 
     def has_email_sent_before(self) -> bool:
         """Check whether a notification email has ever been sent previously."""
