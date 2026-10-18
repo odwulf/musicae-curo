@@ -198,8 +198,11 @@ tidal-cli playlist export "Daily Megamix" --format json --output ~/megamix.json
 tidal-cli playlist export "Daily Megamix" --format m3u8 --output ~/megamix.m3u8
 tidal-cli playlist export "Daily Megamix" --format csv --output ~/megamix.csv
 
-# Detect unavailable tracks and evaluate replacement candidates (default: 100% threshold & dry-run)
+# Detect unavailable tracks and evaluate replacement candidates (default: 80% threshold & dry-run)
 tidal-cli playlist repair "My Heavy Rotation"
+
+# Apply replacements live on Tidal (threshold defaults to 80%)
+tidal-cli playlist repair "My Heavy Rotation" --live
 
 # Run repair analysis and export report to a custom JSON location
 tidal-cli playlist repair "My Heavy Rotation" --export reports/custom_repair.json
@@ -207,6 +210,17 @@ tidal-cli playlist repair "My Heavy Rotation" --export reports/custom_repair.jso
 # Check all tracks (including playable ones) for newer reissues or remasters
 tidal-cli playlist repair "My Heavy Rotation" --all-tracks
 ```
+
+#### Similarity Scoring Calibration
+Because Tidal strips the `isrc` and album `upc` fields when de-listing tracks, the scoring formula is calibrated so that an exact metadata match achieves **80% (0.80)**:
+- **Title Match (30 pts)**: Normalized title comparison (automatically cleans remaster notes like `(2011 Remaster)`, `(Remastered 2011)`, `- 2011 Remaster`).
+- **Artist Match (25 pts)**: Primary artist ID, collaborating/contributing artist overlap (handles inverted credits on duets), or normalized name comparison.
+- **Duration Match (15 pts)**: Exact runtime within 1s.
+- **Album Name Match (10 pts)**: Normalized release title comparison.
+- **Album Release Date Bonus (+5 pts exact date, +2 pts same year)**: Matches release date from album metadata.
+- **ISRC Bonus (+10 pts)**: Verified exact sound recording code match.
+- **Album UPC Bonus (+10 pts)**: Verified identical album release barcode.
+- **Version Mismatches**: Severe penalties (capping score $\le 40\%$) for Live, Acoustic, Instrumental, or Remix cuts substituting studio tracks, requiring manual approval.
 
 ---
 

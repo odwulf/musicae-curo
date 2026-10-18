@@ -268,7 +268,7 @@ def playlist_export(
 def playlist_repair(
     identifier: str = typer.Argument(..., help="Playlist ID or Name to analyze"),
     threshold: float = typer.Option(
-        1.0, "--threshold", "-t", help="Minimum similarity score (0.0 to 1.0) to replace. Default 1.0 never replaces."
+        0.8, "--threshold", "-t", help="Minimum similarity score (0.0 to 1.0) to replace [default: 0.8]."
     ),
     dry_run: bool = typer.Option(
         True, "--dry-run/--live", help="Simulate replacements without modifying playlist on Tidal."

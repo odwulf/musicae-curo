@@ -37,7 +37,7 @@ class PlaylistRepairService:
     def analyze_and_repair(
         self,
         identifier: str,
-        threshold: float = 1.0,
+        threshold: float = 0.8,
         dry_run: bool = True,
         all_tracks: bool = False,
         export_path: Optional[Path] = None,
@@ -63,6 +63,12 @@ class PlaylistRepairService:
             orig_artist = getattr(getattr(t, "artist", None), "name", "Unknown Artist")
             orig_album = getattr(getattr(t, "album", None), "name", "Unknown Album")
             orig_upc = getattr(getattr(t, "album", None), "upc", None)
+            raw_orig_date = getattr(getattr(t, "album", None), "release_date", None)
+            orig_release_date = (
+                raw_orig_date.isoformat()
+                if isinstance(raw_orig_date, (datetime.datetime, datetime.date))
+                else (str(raw_orig_date) if raw_orig_date and not hasattr(raw_orig_date, "_mock_return_value") else None)
+            )
 
             # Find candidates
             candidates = self.candidate_finder.find_candidates(t, max_candidates=10)
@@ -86,6 +92,7 @@ class PlaylistRepairService:
                     "title": getattr(t, "name", ""),
                     "artist": orig_artist,
                     "album": orig_album,
+                    "album_release_date": orig_release_date,
                     "duration_seconds": getattr(t, "duration", None),
                     "isrc": getattr(t, "isrc", None),
                     "album_upc": orig_upc,
@@ -109,15 +116,25 @@ class PlaylistRepairService:
                 if not dry_run and isinstance(playlist, UserPlaylist):
                     try:
                         new_track_id = str(best_candidate_dict["id"])
-                        # Add substitute at position
-                        playlist.add([new_track_id], position=idx)
-                        # Remove old track at shifted index
-                        playlist.remove_by_index(idx + 1)
-                        track_entry["replacement_status"] = "replaced"
-                        replacements_applied += 1
-                        logger.info(
-                            f"Replaced track #{idx} '{t.name}' with candidate ID {new_track_id} (Score: {best_candidate_dict['similarity_score']})"
-                        )
+                        # Add substitute at position with allow_duplicates=True
+                        added = playlist.add([new_track_id], position=idx, allow_duplicates=True)
+                        if not added:
+                            logger.error(
+                                f"Tidal API did not add candidate ID {new_track_id} for track #{idx} '{t.name}'"
+                            )
+                            track_entry["replacement_status"] = "error: tidal_skipped_add"
+                        else:
+                            # Remove old track at shifted index
+                            removed = playlist.remove_by_index(idx + 1)
+                            if not removed:
+                                logger.error(f"Failed to remove old track at index {idx+1}")
+                                track_entry["replacement_status"] = "error: failed_to_remove_old_track"
+                            else:
+                                track_entry["replacement_status"] = "replaced"
+                                replacements_applied += 1
+                                logger.info(
+                                    f"Replaced track #{idx} '{t.name}' with candidate ID {new_track_id} (Score: {best_candidate_dict['similarity_score']})"
+                                )
                     except Exception as e:
                         logger.error(f"Failed to replace track #{idx}: {e}")
                         track_entry["replacement_status"] = f"error: {e}"

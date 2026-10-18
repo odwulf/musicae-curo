@@ -86,3 +86,102 @@ def test_analyze_and_repair_generates_json_report(tmp_path: Path):
     assert saved_data["playlist_name"] == "80s Pop Favorites"
     assert saved_data["unavailable_tracks_count"] == 1
 
+
+def test_live_replacement_calls_add_with_allow_duplicates_and_removes(tmp_path: Path):
+    from tidalapi.playlist import UserPlaylist
+
+    session = MagicMock()
+    unavail_track = MagicMock(id=999, isrc="USSM18200001", duration=294, available=False, allow_streaming=False, stream_ready=False)
+    unavail_track.name = "Billie Jean"
+    unavail_track.artist.name = "Michael Jackson"
+    unavail_track.album.name = "Thriller"
+    unavail_track.album.upc = "07464381122"
+
+    pl = MagicMock(spec=UserPlaylist)
+    pl.id = "pl-test-123"
+    pl.name = "Live Test"
+    pl.tracks.return_value = [unavail_track]
+    pl.add.return_value = [1001]
+    pl.remove_by_index.return_value = True
+    session.playlist.return_value = pl
+
+    cand = MagicMock(id=1001, isrc="USSM18200001", duration=294, available=True, allow_streaming=True, stream_ready=True)
+    cand.name = "Billie Jean"
+    cand.artist.name = "Michael Jackson"
+    cand.album.name = "Thriller"
+    cand.album.upc = "07464381122"
+
+    session.get_tracks_by_isrc.return_value = [cand]
+    session.get_albums_by_barcode.return_value = []
+    session.search.return_value = {"tracks": []}
+
+    svc = PlaylistRepairService(session, project_root=tmp_path)
+    report = svc.analyze_and_repair(
+        identifier="pl-test-123",
+        threshold=0.8,
+        dry_run=False,
+    )
+
+    assert report["replacements_applied"] == 1
+    pl.add.assert_called_once_with(["1001"], position=0, allow_duplicates=True)
+    pl.remove_by_index.assert_called_once_with(1)
+
+
+def test_live_replacement_safeguard_when_tidal_add_skipped(tmp_path: Path):
+    from tidalapi.playlist import UserPlaylist
+
+    session = MagicMock()
+    unavail_track = MagicMock(id=999, isrc="USSM18200001", duration=294, available=False, allow_streaming=False, stream_ready=False)
+    unavail_track.name = "Billie Jean"
+    unavail_track.artist.name = "Michael Jackson"
+    unavail_track.album.name = "Thriller"
+    unavail_track.album.upc = "07464381122"
+
+    pl = MagicMock(spec=UserPlaylist)
+    pl.id = "pl-test-123"
+    pl.name = "Live Test"
+    pl.tracks.return_value = [unavail_track]
+    # Tidal returns empty list when skipped
+    pl.add.return_value = []
+    session.playlist.return_value = pl
+
+    cand = MagicMock(id=1001, isrc="USSM18200001", duration=294, available=True, allow_streaming=True, stream_ready=True)
+    cand.name = "Billie Jean"
+    cand.artist.name = "Michael Jackson"
+    cand.album.name = "Thriller"
+    cand.album.upc = "07464381122"
+
+    session.get_tracks_by_isrc.return_value = [cand]
+    session.get_albums_by_barcode.return_value = []
+    session.search.return_value = {"tracks": []}
+
+    svc = PlaylistRepairService(session, project_root=tmp_path)
+    report = svc.analyze_and_repair(
+        identifier="pl-test-123",
+        threshold=0.8,
+        dry_run=False,
+    )
+
+    assert report["replacements_applied"] == 0
+    pl.add.assert_called_once_with(["1001"], position=0, allow_duplicates=True)
+    # MUST NOT remove when add failed!
+    pl.remove_by_index.assert_not_called()
+    assert report["unavailable_tracks"][0]["replacement_status"] == "error: tidal_skipped_add"
+
+
+def test_analyze_and_repair_default_threshold_is_80_percent(tmp_path: Path):
+    session = MagicMock()
+    pl = MagicMock()
+    pl.id = "pl-123"
+    pl.name = "Defaults Test"
+    pl.tracks.return_value = []
+    session.playlist.return_value = pl
+
+    svc = PlaylistRepairService(session, project_root=tmp_path)
+    report = svc.analyze_and_repair(identifier="pl-123")
+
+    assert report["threshold_configured"] == 0.8
+    assert report["dry_run"] is True
+
+
+
