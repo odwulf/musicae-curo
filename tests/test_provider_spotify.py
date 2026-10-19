@@ -380,3 +380,22 @@ def test_cli_provider_list_and_auth_status(tmp_path: Path, monkeypatch):
     assert res_status.exit_code == 0
     assert "Not authenticated on Spotify" in res_status.stdout
 
+
+def test_spotify_login_403_premium_required_friendly_error(tmp_path: Path, monkeypatch):
+    cfg = ConfigManager(custom_config_dir=tmp_path)
+    sm = SpotifySessionManager(cfg)
+    sm.save_credentials("client_id", "client_secret")
+
+    # Mock token cache existing
+    sm.session_file.write_text('{"access_token": "valid_tok", "refresh_token": "ref_tok", "expires_at": 9999999999}', encoding="utf-8")
+
+    with patch("spotipy.Spotify") as MockSp:
+        mock_instance = MockSp.return_value
+        mock_instance.current_user.side_effect = Exception(
+            "http status: 403, code: -1 - https://api.spotify.com/v1/me/: Active premium subscription required for the owner of the app."
+        )
+
+        with pytest.raises(SpotifyAuthenticationError, match="An active Spotify Premium subscription is required"):
+            sm.load_session()
+
+

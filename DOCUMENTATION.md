@@ -85,6 +85,66 @@ Adapters self-register into `ProviderRegistry`. At runtime, the active provider 
 > [!IMPORTANT]
 > **Tidal and Spotify are currently active, fully operational providers.** The other providers (Deezer, Qobuz, YouTube Music) are scaffolded architectural stubs ready for future integration. Attempting to run library or playback operations against scaffolded stubs will clearly inform you that the adapter is not yet implemented.
 
+### Provider Authentication & Membership Requirements
+
+| Provider | Status | Membership Required for API? | Auth Flow | Credentials Needed |
+| :--- | :--- | :--- | :--- | :--- |
+| **Tidal** | **Active** | **Yes (Paid Subscription)**<br>Free tier was shut down in April 2024. | OAuth 2.0 Device Flow | None (built-in client, approve in browser/phone) |
+| **Spotify** | **Active** | **Yes (Paid Premium for App Owner)**<br>Developer platform requires Premium for app creation. | OAuth 2.0 Authorization Code | Spotify Developer Client ID & Client Secret |
+| **Deezer** | *Scaffolded* | **No (Free or Premium)**<br>Free accounts support playlist management. | OAuth 2.0 / ARL Token | Deezer App ID & Secret or User ARL |
+| **Qobuz** | *Scaffolded* | **Yes (Paid Account)**<br>Streaming & full library access require Studio/Sublime. | User Login + App ID | Qobuz App ID & App Secret |
+| **YouTube Music** | *Scaffolded* | **No (Free Google Account)**<br>YouTube Premium is not required for playlist API. | Browser Cookie / OAuth | `oauth.json` or request header cookies |
+
+#### Authenticating with Tidal
+
+Tidal requires an active paid individual, family, or student subscription (or active trial) to access user playlists and streaming catalog endpoints.
+
+To authenticate:
+```bash
+curo auth login -p tidal
+```
+1. Musicae Curo requests an OAuth 2.0 Device Code and displays a verification link in the terminal:
+   ```text
+   To authorize Tidal with Musicae Curo, visit:
+   https://link.tidal.com/ABCDE
+   Code: ABCDE (expires in 300s)
+   ```
+2. Open the link on any browser (desktop or mobile), log into your Tidal account, and approve the authorization.
+3. Once approved, session tokens are securely saved to `~/.config/curo/tidal_session.json` (`0600` permissions). Musicae Curo automatically performs headless silent token refresh during cron runs.
+
+#### Authenticating with Spotify
+
+> [!NOTE]
+> **Spotify Premium Required for Developer Apps**
+> Spotify requires the account that registers the app on the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) to have an active Spotify Premium plan (Individual, Duo, or Family). Free accounts cannot create functional API applications.
+
+To authenticate:
+1. **Create a Developer App**:
+   - Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and log in with your **Spotify Premium account**.
+   - Click **Create App**.
+   - Set **App Name** (e.g. `Musicae Curo`) and **App Description**.
+   - Under **Redirect URIs**, add:
+     ```text
+     http://127.0.0.1:8888/callback
+     ```
+   - Select **Web API** under "Which APIs are you using?" and save the app.
+   - Go to app **Settings** and copy your **Client ID** and **Client Secret**.
+2. **Log In via CLI**:
+   ```bash
+   curo auth login -p spotify
+   ```
+   Musicae Curo will prompt you for your Client ID and Client Secret on first run, saving them to `~/.config/curo/config.json`.
+   
+   *(Alternatively, export them as environment variables `SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET` before running the command).*
+3. A browser window will open automatically asking you to authorize Musicae Curo. If running on a headless server, copy the callback URL from your browser address bar back into the CLI prompt.
+4. Tokens are saved to `~/.config/curo/spotify_session.json` (`0600` permissions) and refreshed silently and automatically.
+
+#### Scaffolded Providers (Deezer, Qobuz, YouTube Music)
+
+- **Deezer**: When implemented, free accounts can be used for playlist sync and repair. Authentication can be performed via standard OAuth or by extracting an account ARL session cookie.
+- **Qobuz**: Qobuz requires developer API keys (App ID and App Secret). Full catalog matching works best with an active Studio/Sublime subscription.
+- **YouTube Music**: YouTube Music does not require a YouTube Premium subscription to manage personal playlists or search tracks. Authentication relies on Google account cookie tokens or local OAuth tokens via `ytmusicapi`.
+
 ---
 
 ## 2. Directory Structure & File Permissions

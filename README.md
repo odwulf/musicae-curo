@@ -65,12 +65,16 @@ uv sync
 
 ### 1. Authenticate Streaming Service
 ```bash
-# Log in with Tidal (default provider)
-uv run curo auth login
+# Log in with Tidal (Device OAuth flow)
+uv run curo auth login -p tidal
+
+# Log in with Spotify (OAuth2 authorization code flow)
+uv run curo auth login -p spotify
 
 # Check authentication status
 uv run curo auth status
 ```
+*See the [Provider Authentication Guide](DOCUMENTATION.md#provider-authentication--membership-requirements) for details on membership requirements (free vs paid) and setup.*
 
 ### 2. Discover Your Dynamic Mixes
 ```bash
