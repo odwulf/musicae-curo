@@ -361,8 +361,15 @@ def playlist_snapshot(
     notify: bool = typer.Option(True, "--notify/--no-notify", help="Dispatch email notification if configured and changes/alerts detected"),
     all_mail: bool = typer.Option(False, "--all-mail", "-a", help="Send full 'All Playlists Baseline Overview' email"),
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
+    quiet: bool = typer.Option(False, "-q", "--quiet", help="Suppress console output (ideal for cron)."),
+    json_mode: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
 ) -> None:
     """Save versioned SHA-256 snapshot of personal playlists."""
+    if quiet:
+        state["quiet"] = True
+    if json_mode:
+        state["json_mode"] = True
+
     p = get_active_provider(provider, require_active=True)
     snap_svc = SnapshotService(p, cfg=state["config"])
     notif_info = None
@@ -386,6 +393,9 @@ def playlist_snapshot(
     if state["json_mode"]:
         payload = {"playlists": snapshots, "notification": notif_info} if notif_info else snapshots
         console.print_json(data=payload)
+        return
+
+    if state["quiet"]:
         return
 
     table = Table(title=f"Playlist Snapshots ({p.display_name})", border_style="cyan")
@@ -850,14 +860,21 @@ def mix_list(
 def mix_daily(
     format: str = typer.Option("Discovery Backup - {date}", "--format", help="Playlist name template"),
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
+    quiet: bool = typer.Option(False, "-q", "--quiet", help="Suppress console output (ideal for cron)."),
+    json_mode: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
 ) -> None:
     """Archive today's Daily Discovery mix into a permanent dated playlist."""
+    if quiet:
+        state["quiet"] = True
+    if json_mode:
+        state["json_mode"] = True
+
     p = get_active_provider(provider, require_active=True)
     svc = MixService(p)
     res = svc.backup_daily_discovery(playlist_name_format=format)
     if state["json_mode"]:
         console.print(json.dumps(res, indent=2))
-    else:
+    elif not state["quiet"]:
         console.print(
             f"[bold green]Archived {res['track_count']} tracks into '{res['playlist_name']}' on {p.display_name}![/bold green]"
         )
@@ -869,14 +886,21 @@ def mix_megamix(
     mode: str = typer.Option("replace", "--mode", help="Mode: replace or append"),
     no_shuffle: bool = typer.Option(False, "--no-shuffle", help="Disable random shuffle"),
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
+    quiet: bool = typer.Option(False, "-q", "--quiet", help="Suppress console output (ideal for cron)."),
+    json_mode: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
 ) -> None:
     """Synthesize all daily discovery mixes into a consolidated Megamix."""
+    if quiet:
+        state["quiet"] = True
+    if json_mode:
+        state["json_mode"] = True
+
     p = get_active_provider(provider, require_active=True)
     svc = MixService(p)
     res = svc.create_megamix(target_playlist=target, mode=mode, shuffle=not no_shuffle)
     if state["json_mode"]:
         console.print(json.dumps(res, indent=2))
-    else:
+    elif not state["quiet"]:
         console.print(
             f"[bold green]Synthesized Megamix '{target}' with {res['total_unique_tracks']} unique tracks on {p.display_name}![/bold green]"
         )
@@ -1001,15 +1025,22 @@ def job_list() -> None:
 def job_run(
     job_name: str = typer.Argument(..., help="Job identifier declared in jobs.yaml"),
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
+    quiet: bool = typer.Option(False, "-q", "--quiet", help="Suppress console output (ideal for cron)."),
+    json_mode: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
 ) -> None:
     """Execute an automated job action pipeline."""
+    if quiet:
+        state["quiet"] = True
+    if json_mode:
+        state["json_mode"] = True
+
     p = get_active_provider(provider, require_active=True)
     runner = JobRunner(provider=p, cfg=state["config"])
     try:
         res = runner.run_job(job_name)
         if state["json_mode"]:
             console.print(json.dumps(res, indent=2))
-        else:
+        elif not state["quiet"]:
             console.print(f"[bold green]Job '{job_name}' completed successfully ({res['actions_executed']} action(s)).[/bold green]")
     except Exception as e:
         err_console.print(f"[bold red]Job '{job_name}' failed: {e}[/bold red]")
