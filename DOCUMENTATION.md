@@ -91,7 +91,7 @@ Adapters self-register into `ProviderRegistry`. At runtime, the active provider 
 | :--- | :--- | :--- | :--- | :--- |
 | **Tidal** | **Active** | **Yes (Paid Subscription)**<br>Free tier was shut down in April 2024. | OAuth 2.0 Device Flow | None (built-in client, approve in browser/phone) |
 | **Spotify** | **Active** | **Yes (Paid Premium for App Owner)**<br>Developer platform requires Premium for app creation. | OAuth 2.0 Authorization Code | Spotify Developer Client ID & Client Secret |
-| **Deezer** | *Scaffolded* | **No (Free or Premium)**<br>Free accounts support playlist management. | OAuth 2.0 / ARL Token | Deezer App ID & Secret or User ARL |
+| **Deezer** | **Active** | **No (Free or Premium)**<br>Free accounts support playlist management & catalog search. | Direct Token / OAuth 2.0 | Access Token or Deezer App ID & Secret |
 | **Qobuz** | *Scaffolded* | **Yes (Paid Account)**<br>Streaming & full library access require Studio/Sublime. | User Login + App ID | Qobuz App ID & App Secret |
 | **YouTube Music** | *Scaffolded* | **No (Free Google Account)**<br>YouTube Premium is not required for playlist API. | Browser Cookie / OAuth | `oauth.json` or request header cookies |
 
@@ -139,9 +139,28 @@ To authenticate:
 3. A browser window will open automatically asking you to authorize Musicae Curo. If running on a headless server, copy the callback URL from your browser address bar back into the CLI prompt.
 4. Tokens are saved to `~/.config/curo/spotify_session.json` (`0600` permissions) and refreshed silently and automatically.
 
-#### Scaffolded Providers (Deezer, Qobuz, YouTube Music)
+#### Authenticating with Deezer
 
-- **Deezer**: When implemented, free accounts can be used for playlist sync and repair. Authentication can be performed via standard OAuth or by extracting an account ARL session cookie.
+Deezer allows free user accounts to inspect libraries, manage playlists, search tracks, and access Deezer Flow discovery mixes without requiring a paid subscription.
+
+To authenticate:
+```bash
+curo auth login -p deezer
+```
+
+Musicae Curo provides two authentication options:
+1. **Direct Access Token (Fastest)**:
+   - Paste an access token directly at the prompt (or export `DEEZER_ACCESS_TOKEN`).
+2. **OAuth 2.0 Web Flow**:
+   - Create a free developer application at [https://developers.deezer.com/myapps](https://developers.deezer.com/myapps).
+   - Set the Redirect URL domain to `http://127.0.0.1:8888/callback`.
+   - Provide your Application ID and Secret Key at the prompt (or export `DEEZER_APP_ID` and `DEEZER_APP_SECRET`).
+   - The CLI opens a browser window for authorization and captures the callback automatically via a local temporary server.
+
+Tokens and user details are securely cached at `~/.config/curo/deezer_session.json` (`0600` permissions).
+
+#### Scaffolded Providers (Qobuz, YouTube Music)
+
 - **Qobuz**: Qobuz requires developer API keys (App ID and App Secret). Full catalog matching works best with an active Studio/Sublime subscription.
 - **YouTube Music**: YouTube Music does not require a YouTube Premium subscription to manage personal playlists or search tracks. Authentication relies on Google account cookie tokens or local OAuth tokens via `ytmusicapi`.
 
@@ -158,6 +177,7 @@ Musicae Curo manages its configuration and state in a secure dedicated directory
 | `~/.config/curo/jobs.yaml` | Declarative scheduled job definitions | `0600` (`rw-------`) |
 | `~/.config/curo/tidal_session.json` | OAuth token cache for Tidal adapter | `0600` (`rw-------`) |
 | `~/.config/curo/spotify_session.json` | OAuth token cache for Spotify adapter | `0600` (`rw-------`) |
+| `~/.config/curo/deezer_session.json` | OAuth/Access token cache for Deezer adapter | `0600` (`rw-------`) |
 | `~/.config/curo/snapshots/<slug>/` | Incremental versioned SHA-256 JSON backups | `0700` (`rwx------`) |
 | `~/.config/curo/track_registry.json` | Historical healthy track metadata registry | `0600` (`rw-------`) |
 | `~/.config/curo/availability_alerts.log` | Append-only log of delisted tracks | `0600` (`rw-------`) |
