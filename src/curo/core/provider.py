@@ -47,6 +47,12 @@ class MusicProvider(ABC):
         """Return user profile and token status metadata."""
         ...
 
+    # --- Favorites / Liked Songs ---
+    @abstractmethod
+    def get_favorite_tracks(self) -> List[Track]:
+        """Fetch all favorite/liked tracks for the authenticated user with full pagination."""
+        ...
+
     # --- Playlists ---
     @abstractmethod
     def get_user_playlists(self) -> List[Playlist]:

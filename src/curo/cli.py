@@ -39,6 +39,7 @@ mix_app = typer.Typer(name="mix", help="Daily discovery archiving and randomized
 job_app = typer.Typer(name="job", help="Manage and execute automated cron jobs.")
 notify_app = typer.Typer(name="notify", help="Configure and dispatch email digests and availability notifications.")
 provider_app = typer.Typer(name="provider", help="Manage configured music streaming providers.")
+favorites_app = typer.Typer(name="favorites", help="Inspect, snapshot, and backup favorite/liked tracks.")
 
 app.add_typer(auth_app)
 app.add_typer(playlist_app)
@@ -47,6 +48,7 @@ app.add_typer(mix_app)
 app.add_typer(job_app)
 app.add_typer(notify_app)
 app.add_typer(provider_app)
+app.add_typer(favorites_app)
 
 console = Console()
 err_console = Console(stderr=True)
@@ -1046,7 +1048,7 @@ def job_run(
     try:
         res = runner.run_job(job_name)
         if state["json_mode"]:
-            console.print(json.dumps(res, indent=2))
+            console.print_json(data=res)
         elif not state["quiet"]:
             console.print(f"[bold green]Job '{job_name}' completed successfully ({res['actions_executed']} action(s)).[/bold green]")
     except Exception as e:
@@ -1061,6 +1063,150 @@ def job_cron_help(
     """Display ready-to-copy crontab configuration line."""
     runner = JobRunner(cfg=state["config"])
     console.print(runner.generate_cron_help(job_name=job_name))
+
+
+# ---------------------------------------------------------------------------
+# Favorites Commands
+# ---------------------------------------------------------------------------
+@favorites_app.command("list")
+def favorites_list(
+    limit: Optional[int] = typer.Option(None, "--limit", "-l", help="Limit number of tracks displayed on console"),
+    provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
+) -> None:
+    """List favorite/liked tracks."""
+    p = get_active_provider(provider, require_active=True)
+    tracks = p.get_favorite_tracks()
+
+    if state["json_mode"]:
+        data = [
+            {
+                "id": str(t.id),
+                "title": t.title,
+                "artist": getattr(getattr(t, "artist", None), "name", "Unknown Artist"),
+                "album": getattr(getattr(t, "album", None), "title", "Unknown Album"),
+                "duration_seconds": t.duration_seconds,
+                "isrc": t.isrc,
+                "available": t.available,
+            }
+            for t in tracks
+        ]
+        console.print_json(data=data)
+        return
+
+    table = Table(title=f"{p.display_name} Favorite Tracks ({len(tracks)} total)", border_style="cyan")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Title", style="bold")
+    table.add_column("Artist")
+    table.add_column("Album", style="dim")
+    table.add_column("Duration", justify="right")
+    table.add_column("ISRC", style="dim")
+    table.add_column("Status")
+
+    display_tracks = tracks[:limit] if limit and limit > 0 else tracks
+    for idx, t in enumerate(display_tracks, start=1):
+        dur = getattr(t, "duration_seconds", 0) or 0
+        dur_str = f"{dur//60}:{dur%60:02d}"
+        art = getattr(getattr(t, "artist", None), "name", "Unknown Artist")
+        alb = getattr(getattr(t, "album", None), "title", "Unknown Album")
+        status = "[green]Available[/green]" if getattr(t, "available", True) else "[bold red]Unavailable[/bold red]"
+        table.add_row(
+            str(idx),
+            t.title,
+            art,
+            alb,
+            dur_str,
+            str(t.isrc or ""),
+            status,
+        )
+
+    console.print(table)
+    if limit and len(tracks) > limit:
+        console.print(f"[dim]Showing {limit} of {len(tracks)} favorite tracks. Omit --limit to see all.[/dim]")
+
+
+@favorites_app.command("snapshot")
+def favorites_snapshot(
+    alert: bool = typer.Option(True, "--alert/--no-alert", help="Record alerts if unavailable tracks are detected"),
+    provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
+) -> None:
+    """Take a versioned SHA-256 snapshot of favorite/liked tracks."""
+    p = get_active_provider(provider, require_active=True)
+    svc = SnapshotService(p, cfg=state["config"])
+    try:
+        res = svc.snapshot_favorite_tracks(alert_on_unavailable=alert)
+    except Exception as e:
+        err_console.print(f"[bold red]Snapshot failed: {e}[/bold red]")
+        raise typer.Exit(1)
+
+    if state["json_mode"]:
+        console.print_json(data=res)
+        return
+
+    table = Table(title=f"Favorites Snapshot -- {p.display_name}", border_style="green")
+    table.add_column("Property", style="bold")
+    table.add_column("Value")
+
+    table.add_row("Total Favorites", str(res.get("track_count", 0)))
+    table.add_row("Snapshot Version", str(res.get("version", "")))
+    table.add_row("SHA-256 Checksum", str(res.get("checksum", ""))[:16] + "...")
+    table.add_row("Added Since Last", f"[green]+{len(res.get('added_tracks', []))}[/green]")
+    table.add_row("Removed Since Last", f"[red]-{len(res.get('removed_tracks', []))}[/red]")
+    table.add_row("Unavailable Alerts", f"[yellow]{res.get('unavailable_alerts_count', 0)}[/yellow]")
+    table.add_row("Snapshot Path", str(res.get("snapshot_path", "")))
+
+    console.print(table)
+
+
+@favorites_app.command("backup")
+def favorites_backup(
+    target: str = typer.Option("Favorites Backup", "--target", "-t", help="Target playlist title"),
+    mode: str = typer.Option("replace", "--mode", "-m", help="Mode: replace (wipe target first) or append"),
+    description: str = typer.Option("Automated backup of favorite/liked tracks", "--desc", "-d", help="Playlist description"),
+    provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
+) -> None:
+    """Mirror favorite/liked tracks into a regular playlist."""
+    p = get_active_provider(provider, require_active=True)
+    svc = PlaylistService(p)
+    try:
+        res = svc.backup_favorites_to_playlist(target_playlist=target, mode=mode, description=description)
+    except Exception as e:
+        err_console.print(f"[bold red]Backup failed: {e}[/bold red]")
+        raise typer.Exit(1)
+
+    if state["json_mode"]:
+        console.print_json(data=res)
+        return
+
+    console.print(
+        Panel(
+            f"[bold green]Successfully mirrored {res.get('total_favorites', 0)} favorites into '{target}' on {p.display_name} (mode: {mode}).[/bold green]\n"
+            f"[dim]Playlist ID: {res.get('playlist_id')}[/dim]",
+            title="Favorites Backup Complete",
+            border_style="green",
+        )
+    )
+
+
+@favorites_app.command("export")
+def favorites_export(
+    format: str = typer.Option("json", "--format", "-f", help="Export format: json, m3u8, csv"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="File path to save export"),
+    provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
+) -> None:
+    """Export favorite/liked tracks to JSON, M3U8, or CSV."""
+    p = get_active_provider(provider, require_active=True)
+    svc = PlaylistService(p)
+    try:
+        content = svc.export_favorites(export_format=format)
+        if output:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(content, encoding="utf-8")
+            console.print(f"[bold green]Exported favorites to {output}[/bold green]")
+        else:
+            console.print(content)
+    except Exception as e:
+        err_console.print(f"[bold red]Export failed: {e}[/bold red]")
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":

@@ -62,6 +62,7 @@ All domain services operate exclusively on pure, provider-agnostic domain models
 ### Provider SPI (`curo.core.provider.MusicProvider`)
 Every music streaming platform implements `MusicProvider`:
 - **Authentication**: `login()`, `logout()`, `get_auth_info()`, `is_authenticated()`.
+- **Favorites / Liked Songs**: `get_favorite_tracks()` (full pagination over thousands of saved tracks).
 - **Playlists**: `get_user_playlists()`, `get_playlist()`, `get_playlist_tracks()`, `create_playlist()`, `add_tracks_to_playlist()`, `remove_track_from_playlist_by_index()`, `clear_playlist()`.
 - **Discovery Mixes**: `get_daily_discovery_mix()`, `get_daily_mixes()`.
 - **Search & Identifiers**: `get_track()`, `get_tracks_by_isrc()`, `get_album()`, `get_albums_by_barcode()`, `get_album_tracks()`, `search_tracks()`.
@@ -299,6 +300,8 @@ jobs:
 | `create_megamix` | Merges Daily Discovery and all active Daily Mixes into a single deduplicated, shuffled playlist. | - `target_playlist` (default: `"Daily Megamix"`)<br>- `include_discovery` (bool, default: `true`)<br>- `include_daily_mixes` (bool, default: `true`)<br>- `shuffle` (bool, default: `true`)<br>- `mode` (`replace` or `append`, default: `replace`)<br>- `description` (template string)<br>- `limit` (optional integer limit) |
 | `snapshot_all_playlists` | Runs SHA-256 versioned snapshots across all personal playlists, updates track history registry, checks track availability, and sends email notifications. | - `alert_on_unavailable` (bool, default: `true`)<br>- `notify` (bool, default: `true`)<br>- `force_all_mail` (bool, default: `false`) |
 | `snapshot_playlist` | Takes a versioned snapshot of a single designated playlist. | - `playlist` (required: playlist title or ID)<br>- `alert_on_unavailable` (bool, default: `true`) |
+| `snapshot_favorite_tracks` | Takes a versioned SHA-256 snapshot of all favorite/liked tracks, updates registry, and logs availability alerts. | - `alert_on_unavailable` (bool, default: `true`) |
+| `backup_favorites_to_playlist` | Mirrors all favorite/liked tracks into a designated regular playlist with full pagination. | - `target_playlist` (default: `"Favorites Backup"`)<br>- `mode` (`replace` or `append`, default: `replace`)<br>- `description` (optional description) |
 | `export_playlist` | Exports a designated playlist to disk in the specified format. | - `playlist` (required: playlist title or ID)<br>- `format` (`json`, `m3u8`, or `csv`, default: `json`) |
 | `sync_playlist` | Synchronizes playlist tracks between providers or within the same provider (`mirror` or `append` modes). | - `source_playlist` (required: title or ID)<br>- `target_playlist` (optional: target title)<br>- `source_provider` (optional: provider name)<br>- `target_provider` (optional: target provider name)<br>- `mode` (`mirror` or `append`, default: `mirror`)<br>- `threshold` (float, default: `0.8`)<br>- `dry_run` (bool, default: `false`)<br>- `create_if_missing` (bool, default: `true`) |
 
@@ -345,6 +348,18 @@ jobs:
         params:
           alert_on_unavailable: true
           notify: true
+
+  daily-favorites-backup:
+    description: "Daily versioned snapshot and playlist mirror of all favorite/liked tracks"
+    actions:
+      - action: snapshot_favorite_tracks
+        params:
+          alert_on_unavailable: true
+      - action: backup_favorites_to_playlist
+        params:
+          target_playlist: "Favorites Backup"
+          mode: "replace"
+          description: "Automated daily backup of favorite/liked tracks"
 ```
 
 ### Scheduling with Linux `cron` or Task Scheduler
@@ -384,6 +399,14 @@ curo auth logout [-p tidal]     # Clear saved credentials
 ```bash
 curo provider list              # List all registered providers and active status
 curo provider default <name>    # Set default provider (e.g. tidal)
+```
+
+### Favorite Tracks (`curo favorites`)
+```bash
+curo favorites list [-p <prov>] [--limit <num>] [--json]
+curo favorites snapshot [-p <prov>] [--no-alerts] [--json]
+curo favorites backup [-p <prov>] [--target <name>] [--mode replace|append] [--desc <text>]
+curo favorites export [-p <prov>] [--format json|m3u8|csv] [--output <path>]
 ```
 
 ### Playlists (`curo playlist`)

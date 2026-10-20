@@ -119,6 +119,16 @@ class JobRunner:
                         identifier=params["playlist"],
                         alert_on_unavailable=params.get("alert_on_unavailable", True),
                     )
+                elif action_type == "snapshot_favorite_tracks":
+                    res = snapshot_service.snapshot_favorite_tracks(
+                        alert_on_unavailable=params.get("alert_on_unavailable", True),
+                    )
+                elif action_type == "backup_favorites_to_playlist":
+                    res = playlist_service.backup_favorites_to_playlist(
+                        target_playlist=params.get("target_playlist", "Favorites Backup"),
+                        mode=params.get("mode", "replace"),
+                        description=params.get("description", "Automated backup of favorite/liked tracks"),
+                    )
                 elif action_type == "sync_playlist":
                     from curo.services.playlist_sync_service import PlaylistSyncService
 

@@ -245,6 +245,29 @@ class SpotifyProvider(MusicProvider):
             updated_at=None,
         )
 
+    # --- Favorites / Liked Songs ---
+    def get_favorite_tracks(self) -> List[Track]:
+        """Fetch all saved/liked tracks from Spotify with full pagination."""
+        result: List[Track] = []
+        try:
+            pages = self.session.current_user_saved_tracks(limit=50)
+            while pages:
+                items = pages.get("items", []) if isinstance(pages, dict) else (getattr(pages, "items", []) or [])
+                for item in items:
+                    if not item:
+                        continue
+                    t_data = item.get("track") if isinstance(item, dict) else getattr(item, "track", None)
+                    if t_data:
+                        result.append(self.to_domain_track(t_data))
+                if isinstance(pages, dict) and pages.get("next"):
+                    pages = self.session.next(pages)
+                else:
+                    break
+        except Exception as e:
+            logger.error(f"Failed to fetch Spotify favorite tracks: {e}")
+            raise
+        return result
+
     # --- Playlists ---
     def get_user_playlists(self) -> List[Playlist]:
         result: List[Playlist] = []

@@ -44,6 +44,10 @@ class ProviderStub(MusicProvider):
     def get_session_info(self) -> Dict[str, Any]:
         return {"logged_in": False, "provider": self.name, "status": "scaffolded_stub"}
 
+    def get_favorite_tracks(self) -> List[Track]:
+        self._not_implemented("get_favorite_tracks")
+        return []
+
     def get_user_playlists(self) -> List[Playlist]:
         self._not_implemented("get_user_playlists")
         return []
