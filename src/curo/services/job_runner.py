@@ -99,6 +99,7 @@ class JobRunner:
                         mode=params.get("mode", "replace"),
                         description=params.get("description", "All daily mix tunes in random order - updated on {date}"),
                         limit=params.get("limit"),
+                        exclude_recent_days=params.get("exclude_recent_days", 0),
                     )
                 elif action_type == "export_playlist":
                     res = {

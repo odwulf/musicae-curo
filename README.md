@@ -87,8 +87,11 @@ uv run curo mix list
 # Archive today's Daily Discovery mix
 uv run curo mix backup-discovery
 
-# Generate today's deduplicated, randomized Megamix
+# Generate today's deduplicated, randomized Megamix (wiped clean daily)
 uv run curo mix megamix
+
+# Generate a Fresh Megamix (excluding tracks heard in the last 7 days)
+uv run curo mix megamix --target "Daily Fresh Megamix" --exclude-recent-days 7
 ```
 
 ### 3. Backup & Snapshot Playlists (Versioning & Alerts)

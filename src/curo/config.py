@@ -29,7 +29,21 @@ jobs:
           include_daily_mixes: true
           shuffle: true
           mode: "replace" # 'replace' wipes previous megamix content; 'append' adds to it
+          exclude_recent_days: 0
           description: "All daily mix tunes in random order - updated on {date}"
+
+  daily-fresh-megamix:
+    description: "Build a daily megamix containing only fresh tracks not seen in the last 7 days"
+    actions:
+      - action: create_megamix
+        params:
+          target_playlist: "Daily Fresh Megamix"
+          include_discovery: true
+          include_daily_mixes: true
+          shuffle: true
+          mode: "replace"
+          exclude_recent_days: 7 # only include tunes not featured in the preceding 7 days
+          description: "Fresh daily mix tunes not heard in the last 7 days - updated on {date}"
 
   daily-playlist-backup:
     description: "Daily versioned snapshot of all personal playlists with availability alerts"
@@ -86,6 +100,7 @@ class ConfigManager:
         self.logs_dir = self.config_dir / "logs"
         self.alerts_log_file = self.logs_dir / "availability_alerts.log"
         self.notification_state_file = self.config_dir / "notification_state.json"
+        self.megamix_history_file = self.config_dir / "megamix_history.json"
 
     def get_provider_session_file(self, provider_name: str) -> Path:
         """Return the path to the session credentials file for a specific provider."""

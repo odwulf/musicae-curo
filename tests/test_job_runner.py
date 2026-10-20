@@ -96,3 +96,29 @@ def test_cli_job_run_quiet_and_json_modes(tmp_path: Path, monkeypatch):
         assert res_json.exit_code == 0
         assert '"actions_executed": 2' in res_json.stdout
 
+
+def test_run_fresh_megamix_job(tmp_path: Path):
+    """Verify daily-fresh-megamix job passes exclude_recent_days=7 and target_playlist."""
+    cfg = ConfigManager(custom_config_dir=tmp_path)
+    mock_provider = MagicMock(spec=MusicProvider)
+    runner = JobRunner(provider=mock_provider, cfg=cfg)
+
+    with patch("curo.services.job_runner.MixService") as MockMixService:
+        mix_inst = MockMixService.return_value
+        mix_inst.create_megamix.return_value = {"success": True, "tracks_added": 25}
+
+        res = runner.run_job("daily-fresh-megamix")
+
+        assert res["success"] is True
+        assert res["actions_executed"] == 1
+        mix_inst.create_megamix.assert_called_once_with(
+            target_playlist="Daily Fresh Megamix",
+            include_discovery=True,
+            include_daily_mixes=True,
+            shuffle=True,
+            mode="replace",
+            description="Fresh daily mix tunes not heard in the last 7 days - updated on {date}",
+            limit=None,
+            exclude_recent_days=7,
+        )
+

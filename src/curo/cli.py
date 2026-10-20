@@ -885,6 +885,7 @@ def mix_megamix(
     target: str = typer.Option("Daily Megamix", "--target", help="Target playlist title"),
     mode: str = typer.Option("replace", "--mode", help="Mode: replace or append"),
     no_shuffle: bool = typer.Option(False, "--no-shuffle", help="Disable random shuffle"),
+    exclude_recent_days: int = typer.Option(0, "--exclude-recent-days", "-e", help="Exclude tracks featured in the last N days (0 = disabled)"),
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
     quiet: bool = typer.Option(False, "-q", "--quiet", help="Suppress console output (ideal for cron)."),
     json_mode: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
@@ -897,12 +898,18 @@ def mix_megamix(
 
     p = get_active_provider(provider, require_active=True)
     svc = MixService(p)
-    res = svc.create_megamix(target_playlist=target, mode=mode, shuffle=not no_shuffle)
+    res = svc.create_megamix(
+        target_playlist=target,
+        mode=mode,
+        shuffle=not no_shuffle,
+        exclude_recent_days=exclude_recent_days,
+    )
     if state["json_mode"]:
-        console.print(json.dumps(res, indent=2))
+        console.print_json(data=res)
     elif not state["quiet"]:
+        fresh_msg = f" ({res.get('excluded_recent_repeats', 0)} recent repeats excluded)" if exclude_recent_days > 0 else ""
         console.print(
-            f"[bold green]Synthesized Megamix '{target}' with {res['total_unique_tracks']} unique tracks on {p.display_name}![/bold green]"
+            f"[bold green]Synthesized Megamix '{target}' with {res['total_unique_tracks']} unique tracks on {p.display_name}!{fresh_msg}[/bold green]"
         )
 
 
