@@ -78,6 +78,32 @@ def test_add_tracks_chunking(mock_session, mock_provider):
     assert pl.add.call_count == 3
 
 
+def test_add_tracks_strictly_validates_position_not_none(mock_session, mock_provider):
+    """Verify that UserPlaylist.add does not receive position=None, which raises TypeError."""
+    pl = MagicMock(id="target-pl-strict")
+    pl.name = "Strict Playlist"
+
+    def _mock_add(media_ids, allow_duplicates=False, position=-1, limit=100):
+        if position is None:
+            raise TypeError("'<' not supported between instances of 'NoneType' and 'int'")
+        if position < 0:
+            position = 10
+        return list(media_ids)
+
+    pl.add.side_effect = _mock_add
+    mock_session.playlist.return_value = pl
+
+    svc = PlaylistService(mock_provider)
+    track_ids = ["t-1", "t-2", "t-3"]
+
+    added = svc.add_tracks(playlist="target-pl-strict", track_ids=track_ids)
+    assert added is True
+    assert pl.add.call_count == 1
+    # Check that position was not passed as None
+    call_kwargs = pl.add.call_args[1]
+    assert "position" not in call_kwargs or call_kwargs["position"] is not None
+
+
 def test_export_playlist_json_and_m3u(mock_session, mock_provider):
     pl = MagicMock(id="pl-exp")
     pl.name = "Chillhop"
