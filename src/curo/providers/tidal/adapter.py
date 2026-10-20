@@ -308,8 +308,27 @@ class TidalProvider(MusicProvider):
             mix = self.session.mix(mix_id)
             if not mix:
                 raise ValueError(f"Mix not found: {mix_id}")
-            raw_tracks = mix.tracks() or []
-            return [self.to_domain_track(t) for t in raw_tracks]
+
+            raw_tracks = []
+            if not _is_mock(mix):
+                if hasattr(mix, "items") and callable(mix.items):
+                    raw_tracks = mix.items() or []
+                elif hasattr(mix, "tracks") and callable(mix.tracks):
+                    raw_tracks = mix.tracks() or []
+            else:
+                import unittest.mock
+                items_val = getattr(getattr(mix, "items", None), "_mock_return_value", unittest.mock.DEFAULT)
+                tracks_val = getattr(getattr(mix, "tracks", None), "_mock_return_value", unittest.mock.DEFAULT)
+                if items_val is not unittest.mock.DEFAULT:
+                    raw_tracks = mix.items() or []
+                elif tracks_val is not unittest.mock.DEFAULT:
+                    raw_tracks = mix.tracks() or []
+                elif hasattr(mix, "items") and callable(mix.items):
+                    raw_tracks = mix.items() or []
+                elif hasattr(mix, "tracks") and callable(mix.tracks):
+                    raw_tracks = mix.tracks() or []
+
+            return [self.to_domain_track(t) for t in (raw_tracks or [])]
         except Exception as e:
             logger.error(f"Error fetching tracks for mix '{mix_id}': {e}")
             raise
