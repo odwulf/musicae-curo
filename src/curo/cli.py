@@ -909,10 +909,13 @@ def mix_megamix(
     if state["json_mode"]:
         console.print_json(data=res)
     elif not state["quiet"]:
-        fresh_msg = f" ({res.get('excluded_recent_repeats', 0)} recent repeats excluded)" if exclude_recent_days > 0 else ""
-        console.print(
-            f"[bold green]Synthesized Megamix '{target}' with {res['total_unique_tracks']} unique tracks on {p.display_name}!{fresh_msg}[/bold green]"
-        )
+        if not res.get("success"):
+            console.print(f"[bold yellow]Megamix '{target}' not created: {res.get('reason')}[/bold yellow]")
+        else:
+            fresh_msg = f" ({res.get('excluded_recent_repeats', 0)} recent repeats excluded)" if exclude_recent_days > 0 else ""
+            console.print(
+                f"[bold green]Synthesized Megamix '{target}' with {res.get('total_unique_tracks', 0)} unique tracks on {p.display_name}!{fresh_msg}[/bold green]"
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -313,8 +313,9 @@ class MixService:
         if total_unique == 0:
             return {
                 "success": False,
-                "reason": "No tracks extracted from mixes" if not excluded_recent_count else "All candidate tracks were excluded by recent history filter",
+                "reason": "No tracks extracted from mixes" if not excluded_recent_count else f"All {excluded_recent_count} candidate tracks were excluded by the {exclude_recent_days}-day history filter",
                 "target_playlist": target_playlist,
+                "total_unique_tracks": 0,
                 "tracks_count": 0,
                 "exclude_recent_days": exclude_recent_days,
                 "excluded_recent_repeats": excluded_recent_count,

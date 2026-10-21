@@ -122,3 +122,20 @@ def test_run_fresh_megamix_job(tmp_path: Path):
             exclude_recent_days=7,
         )
 
+
+def test_run_job_action_failure_raises_error(tmp_path: Path):
+    """Ensure JobRunner raises JobExecutionError when an action returns success=False."""
+    cfg = ConfigManager(custom_config_dir=tmp_path)
+    mock_provider = MagicMock(spec=MusicProvider)
+    runner = JobRunner(provider=mock_provider, cfg=cfg)
+
+    with patch("curo.services.job_runner.MixService") as MockMixService:
+        mix_inst = MockMixService.return_value
+        mix_inst.create_megamix.return_value = {
+            "success": False,
+            "reason": "All candidate tracks were excluded by the 7-day history filter",
+        }
+
+        with pytest.raises(JobExecutionError, match="All candidate tracks were excluded"):
+            runner.run_job("daily-fresh-megamix")
+
