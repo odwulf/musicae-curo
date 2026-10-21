@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import time
 from typing import Any, Dict, List, Optional, Union
 
 import tidalapi
@@ -370,15 +371,36 @@ class TidalProvider(MusicProvider):
             kwargs: Dict[str, Any] = {"allow_duplicates": True}
             if position is not None:
                 kwargs["position"] = position + i
-            try:
-                res = raw_pl.add(chunk, **kwargs)
-                if not res:
-                    success = False
-            except TypeError:
-                kwargs.pop("allow_duplicates", None)
-                res = raw_pl.add(chunk, **kwargs)
-                if not res:
-                    success = False
+
+            max_retries = 3
+            chunk_success = False
+            for attempt in range(max_retries):
+                try:
+                    res = raw_pl.add(chunk, **kwargs)
+                    chunk_success = bool(res) if res is not None else True
+                    break
+                except TypeError:
+                    kwargs.pop("allow_duplicates", None)
+                    res = raw_pl.add(chunk, **kwargs)
+                    chunk_success = bool(res) if res is not None else True
+                    break
+                except Exception as e:
+                    is_412 = "412" in str(e) or (hasattr(e, "response") and getattr(e.response, "status_code", None) == 412)
+                    if is_412 and attempt < max_retries - 1:
+                        logger.warning(
+                            f"HTTP 412 (ETag precondition failed) adding chunk {i // chunk_size + 1} to playlist {playlist_id}. "
+                            f"Refreshing playlist state and retrying ({attempt + 1}/{max_retries})..."
+                        )
+                        time.sleep(1.5 * (attempt + 1))
+                        refreshed = self._get_raw_playlist(playlist_id)
+                        if refreshed:
+                            raw_pl = refreshed
+                    else:
+                        raise e
+
+            if not chunk_success:
+                success = False
+
         return success
 
     def remove_track_from_playlist_by_index(self, playlist_id: str, index: int) -> bool:
@@ -392,11 +414,25 @@ class TidalProvider(MusicProvider):
         if not raw_pl or not (isinstance(raw_pl, UserPlaylist) or _is_mock(raw_pl)):
             raise ValueError(f"User playlist not found or read-only: {playlist_id}")
         if hasattr(raw_pl, "clear") and not _is_mock(raw_pl):
-            try:
-                res = raw_pl.clear()
-                return bool(res) if res is not None else True
-            except Exception:
-                pass
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    res = raw_pl.clear()
+                    # Allow Tidal's playlist state and ETag to settle after bulk deletion
+                    time.sleep(1.0)
+                    return bool(res) if res is not None else True
+                except Exception as e:
+                    is_412 = "412" in str(e) or (hasattr(e, "response") and getattr(e.response, "status_code", None) == 412)
+                    if is_412 and attempt < max_retries - 1:
+                        logger.warning(
+                            f"HTTP 412 during clear_playlist on {playlist_id}. Retrying ({attempt + 1}/{max_retries})..."
+                        )
+                        time.sleep(1.5 * (attempt + 1))
+                        refreshed = self._get_raw_playlist(playlist_id)
+                        if refreshed:
+                            raw_pl = refreshed
+                    else:
+                        break
         # Fallback or mock handling: remove tracks in reverse
         try:
             raw_tracks = raw_pl.tracks() or []
