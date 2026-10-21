@@ -177,14 +177,6 @@ class TidalProvider(MusicProvider):
             return []
 
         favs = self.session.user.favorites
-        if _is_mock(favs):
-            try:
-                raw = favs.tracks() if callable(favs.tracks) else favs.tracks
-                return [self.to_domain_track(t) for t in (raw or [])]
-            except Exception as e:
-                logger.error(f"Failed to fetch mock favorite tracks: {e}")
-                return []
-
         all_tracks: List[Track] = []
         offset = 0
         limit = 100

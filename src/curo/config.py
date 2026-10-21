@@ -86,6 +86,7 @@ class EmailConfig(BaseModel):
     to_address: Optional[str] = Field(default=None, description="Recipient email address (or comma-separated list)")
     send_on_changes: bool = Field(default=True, description="Send email when a playlist modification is detected")
     send_on_alerts: bool = Field(default=True, description="Send email when an unavailable track alert is detected")
+    exclude_megamix_diff: bool = Field(default=True, description="Exclude exhaustive track additions/removals for megamix playlists")
 
     @property
     def is_configured(self) -> bool:
@@ -217,6 +218,8 @@ class ConfigManager:
                 cfg_dict["from_address"] = os.environ[f"{env_prefix}EMAIL_FROM"]
             if f"{env_prefix}EMAIL_TO" in os.environ:
                 cfg_dict["to_address"] = os.environ[f"{env_prefix}EMAIL_TO"]
+            if f"{env_prefix}EXCLUDE_MEGAMIX_DIFF" in os.environ:
+                cfg_dict["exclude_megamix_diff"] = os.environ[f"{env_prefix}EXCLUDE_MEGAMIX_DIFF"].lower() in ("1", "true", "yes")
 
         return EmailConfig(**cfg_dict)
 

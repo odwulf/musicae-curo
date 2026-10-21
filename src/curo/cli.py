@@ -949,6 +949,7 @@ def notify_config(
     to_addr: Optional[str] = typer.Option(None, "--to-addr", help="Recipient email address"),
     tls: bool = typer.Option(True, "--tls/--no-tls", help="Use STARTTLS encryption"),
     ssl: bool = typer.Option(False, "--ssl/--no-ssl", help="Use direct SSL encryption"),
+    exclude_megamix_diff: Optional[bool] = typer.Option(None, "--exclude-megamix-diff/--include-megamix-diff", help="Exclude exhaustive track list for daily megamixes"),
 ) -> None:
     """Configure SMTP credentials and notification recipients."""
     cfg = state["config"]
@@ -963,6 +964,9 @@ def notify_config(
         to_address=to_addr if to_addr is not None else curr.to_address,
         use_tls=tls,
         use_ssl=ssl,
+        send_on_changes=curr.send_on_changes,
+        send_on_alerts=curr.send_on_alerts,
+        exclude_megamix_diff=exclude_megamix_diff if exclude_megamix_diff is not None else curr.exclude_megamix_diff,
     )
     cfg.save_email_config(new_cfg)
     console.print("[bold green]SMTP configuration updated successfully.[/bold green]")
