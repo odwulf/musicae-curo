@@ -71,10 +71,26 @@ class MusicProvider(ABC):
 
     @abstractmethod
     def create_playlist(
-        self, title: str, description: str = "", is_public: bool = False
+        self, title: str, description: str = "", is_public: bool = False, folder: Optional[str] = None
     ) -> Playlist:
-        """Create a new playlist and return the created domain Playlist object."""
+        """Create a new playlist and return the created domain Playlist object.
+
+        If folder is specified and supported by the provider, the playlist is created in
+        or moved to that folder.
+        """
         ...
+
+    def get_folders(self) -> List[Dict[str, Any]]:
+        """Fetch all playlist folders owned by the authenticated user."""
+        return []
+
+    def create_folder(self, name: str) -> Optional[str]:
+        """Create a new playlist folder and return its ID, or None if unsupported."""
+        return None
+
+    def move_playlist_to_folder(self, playlist_id: str, folder: str) -> bool:
+        """Move a playlist into a folder specified by name or folder ID."""
+        return False
 
     @abstractmethod
     def add_tracks_to_playlist(

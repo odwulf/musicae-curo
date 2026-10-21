@@ -172,6 +172,7 @@ class MixService:
         self,
         playlist_name_format: str = "Discovery Backup - {date}",
         description: str = "Automated daily backup of Daily Discovery",
+        folder: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Archive today's Daily Discovery mix into a permanent dated playlist."""
         today_str = datetime.date.today().isoformat()
@@ -187,17 +188,21 @@ class MixService:
 
         if not track_ids:
             logger.warning("Daily Discovery mix contained 0 tracks.")
-            return {
+            res = {
                 "success": False,
                 "reason": "Discovery mix had no tracks",
                 "playlist_name": playlist_name,
                 "track_count": 0,
             }
+            if folder:
+                res["folder"] = folder
+            return res
 
         playlist = self.playlist_service.get_or_create_playlist(
             title=playlist_name,
             description=f"{description} (archived on {today_str})",
             public=False,
+            folder=folder,
         )
 
         pl_id = getattr(playlist, "id", playlist_name)
@@ -211,7 +216,7 @@ class MixService:
             disc_isrcs = [str(getattr(t, "isrc", "")) for t in tracks if getattr(t, "isrc", None)]
             self._record_daily_history(track_ids, disc_isrcs)
 
-        return {
+        res = {
             "success": True,
             "provider": self.provider.name,
             "playlist_name": playlist_name,
@@ -220,6 +225,9 @@ class MixService:
             "tracks_added": added,
             "date": today_str,
         }
+        if folder:
+            res["folder"] = folder
+        return res
 
     def create_megamix(
         self,
@@ -231,6 +239,7 @@ class MixService:
         description: str = "All daily mix tunes in random order - updated on {date}",
         limit: Optional[int] = None,
         exclude_recent_days: int = 0,
+        folder: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Collect tracks across all daily mixes, deduplicate, shuffle, and build the Megamix."""
         today_str = datetime.date.today().isoformat()
@@ -331,6 +340,7 @@ class MixService:
             title=target_playlist,
             description=formatted_desc,
             public=False,
+            folder=folder,
         )
 
         pl_id = getattr(playlist, "id", target_playlist)
@@ -343,7 +353,7 @@ class MixService:
             track_ids=collected_track_ids,
         )
 
-        return {
+        res = {
             "success": True,
             "provider": self.provider.name,
             "target_playlist": target_playlist,
@@ -358,4 +368,7 @@ class MixService:
             "tracks_added": added,
             "date": today_str,
         }
+        if folder:
+            res["folder"] = folder
+        return res
 

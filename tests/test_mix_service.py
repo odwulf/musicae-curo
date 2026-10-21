@@ -219,6 +219,51 @@ def test_backup_daily_discovery(mock_session, mock_provider):
     assert res["tracks_added"] == 2
 
 
+def test_backup_daily_discovery_with_folder(mock_session, mock_provider):
+    today = datetime.date.today().isoformat()
+    t1 = make_mock_track(555, "Discovery Folder 1")
+    disc = MagicMock(id="m-disc-f", title="Daily Discovery", mix_type="discovery")
+    mock_session.mixes.return_value = [disc]
+
+    m_disc_obj = MagicMock()
+    m_disc_obj.tracks.return_value = [t1]
+    mock_session.mix.return_value = m_disc_obj
+
+    backup_pl = MagicMock(id="bk-pl-f", name=f"Discovery Backup - {today}")
+    svc = MixService(mock_provider)
+    svc.playlist_service.get_or_create_playlist = MagicMock(return_value=backup_pl)
+    svc.playlist_service.add_tracks = MagicMock(return_value=1)
+
+    res = svc.backup_daily_discovery(folder="Discovery Backups")
+
+    assert res["success"] is True
+    assert res["folder"] == "Discovery Backups"
+    svc.playlist_service.get_or_create_playlist.assert_called_once()
+    assert svc.playlist_service.get_or_create_playlist.call_args[1]["folder"] == "Discovery Backups"
+
+
+def test_create_megamix_with_folder(mock_session, mock_provider):
+    t1 = make_mock_track(666, "Mega Track 1")
+    disc = MagicMock(id="m-disc-m", title="Daily Discovery", mix_type="discovery")
+    mock_session.mixes.return_value = [disc]
+
+    m_disc_obj = MagicMock()
+    m_disc_obj.tracks.return_value = [t1]
+    mock_session.mix.return_value = m_disc_obj
+
+    target_pl = MagicMock(id="pl-mega-f", name="Daily Megamix")
+    svc = MixService(mock_provider)
+    svc.playlist_service.get_or_create_playlist = MagicMock(return_value=target_pl)
+    svc.playlist_service.add_tracks = MagicMock(return_value=1)
+
+    res = svc.create_megamix(folder="My Megamixes")
+
+    assert res["success"] is True
+    assert res["folder"] == "My Megamixes"
+    svc.playlist_service.get_or_create_playlist.assert_called_once()
+    assert svc.playlist_service.get_or_create_playlist.call_args[1]["folder"] == "My Megamixes"
+
+
 def test_backup_daily_discovery_with_mix_items_attribute(mock_session, mock_provider):
     """Ensure Mix objects having .items() (as in real tidalapi.mix.Mix) work without error."""
     today = datetime.date.today().isoformat()

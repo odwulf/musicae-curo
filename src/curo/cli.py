@@ -318,17 +318,70 @@ def playlist_create(
     title: str = typer.Argument(..., help="Playlist title"),
     desc: str = typer.Option("", "--desc", help="Description"),
     public: bool = typer.Option(False, "--public", help="Make playlist public"),
+    folder: Optional[str] = typer.Option(None, "--folder", "-f", help="Target playlist folder name or ID"),
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
 ) -> None:
     """Create a new playlist."""
     p = get_active_provider(provider, require_active=True)
     svc = PlaylistService(p)
-    res = svc.create_playlist(title=title, description=desc, public=public)
+    res = svc.create_playlist(title=title, description=desc, public=public, folder=folder)
     pl_id = getattr(res, "id", "")
     if state["json_mode"]:
-        console.print(json.dumps({"id": str(pl_id), "title": title, "provider": p.name}))
+        data: Dict[str, Any] = {"id": str(pl_id), "title": title, "provider": p.name}
+        if folder:
+            data["folder"] = folder
+        console.print_json(data=data)
     else:
-        console.print(f"[bold green]Created playlist '{title}' (ID: {pl_id}) on {p.display_name}.[/bold green]")
+        folder_msg = f" in folder '{folder}'" if folder else ""
+        console.print(f"[bold green]Created playlist '{title}' (ID: {pl_id}){folder_msg} on {p.display_name}.[/bold green]")
+
+
+@playlist_app.command("folders")
+def playlist_folders(
+    provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
+) -> None:
+    """List playlist folders in your library."""
+    p = get_active_provider(provider, require_active=True)
+    svc = PlaylistService(p)
+    folders = svc.get_folders()
+    if state["json_mode"]:
+        console.print_json(data=folders)
+        return
+    if not folders:
+        console.print(f"[dim]No playlist folders found on {p.display_name}.[/dim]")
+        return
+    table = Table(title=f"Playlist Folders on {p.display_name}", show_header=True, header_style="bold magenta")
+    table.add_column("Folder Name", style="cyan")
+    table.add_column("Items", justify="right")
+    table.add_column("Folder ID", style="dim")
+    for f in folders:
+        table.add_row(f.get("name", "Untitled"), str(f.get("total_items", 0)), str(f.get("id", "")))
+    console.print(table)
+
+
+@playlist_app.command("move")
+def playlist_move(
+    identifier: str = typer.Argument(..., help="Playlist title or ID to move"),
+    folder: str = typer.Argument(..., help="Destination folder name or ID"),
+    provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
+) -> None:
+    """Move an existing playlist into a folder."""
+    p = get_active_provider(provider, require_active=True)
+    svc = PlaylistService(p)
+    pl = svc.get_playlist(identifier)
+    if not pl:
+        err_console.print(f"[bold red]Playlist not found: {identifier}[/bold red]")
+        raise typer.Exit(1)
+    pl_id = getattr(pl, "id", identifier)
+    success = svc.move_playlist_to_folder(str(pl_id), folder)
+    if not success:
+        err_console.print(f"[bold red]Failed to move playlist to folder '{folder}' on {p.display_name}.[/bold red]")
+        raise typer.Exit(1)
+    pl_title = getattr(pl, "title", identifier)
+    if state["json_mode"]:
+        console.print_json(data={"success": True, "playlist_id": str(pl_id), "title": pl_title, "folder": folder})
+    else:
+        console.print(f"[bold green]Moved playlist '{pl_title}' into folder '{folder}' on {p.display_name}.[/bold green]")
 
 
 @playlist_app.command("export")
@@ -861,6 +914,7 @@ def mix_list(
 @mix_app.command("daily")
 def mix_daily(
     format: str = typer.Option("Discovery Backup - {date}", "--format", help="Playlist name template"),
+    folder: Optional[str] = typer.Option(None, "--folder", "-f", help="Target playlist folder name or ID"),
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
     quiet: bool = typer.Option(False, "-q", "--quiet", help="Suppress console output (ideal for cron)."),
     json_mode: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
@@ -873,12 +927,13 @@ def mix_daily(
 
     p = get_active_provider(provider, require_active=True)
     svc = MixService(p)
-    res = svc.backup_daily_discovery(playlist_name_format=format)
+    res = svc.backup_daily_discovery(playlist_name_format=format, folder=folder)
     if state["json_mode"]:
-        console.print(json.dumps(res, indent=2))
+        console.print_json(data=res)
     elif not state["quiet"]:
+        folder_msg = f" in folder '{folder}'" if folder else ""
         console.print(
-            f"[bold green]Archived {res['track_count']} tracks into '{res['playlist_name']}' on {p.display_name}![/bold green]"
+            f"[bold green]Archived {res['track_count']} tracks into '{res['playlist_name']}'{folder_msg} on {p.display_name}![/bold green]"
         )
 
 
@@ -888,6 +943,7 @@ def mix_megamix(
     mode: str = typer.Option("replace", "--mode", help="Mode: replace or append"),
     no_shuffle: bool = typer.Option(False, "--no-shuffle", help="Disable random shuffle"),
     exclude_recent_days: int = typer.Option(0, "--exclude-recent-days", "-e", help="Exclude tracks featured in the last N days (0 = disabled)"),
+    folder: Optional[str] = typer.Option(None, "--folder", "-f", help="Target playlist folder name or ID"),
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
     quiet: bool = typer.Option(False, "-q", "--quiet", help="Suppress console output (ideal for cron)."),
     json_mode: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
@@ -905,6 +961,7 @@ def mix_megamix(
         mode=mode,
         shuffle=not no_shuffle,
         exclude_recent_days=exclude_recent_days,
+        folder=folder,
     )
     if state["json_mode"]:
         console.print_json(data=res)
@@ -913,8 +970,9 @@ def mix_megamix(
             console.print(f"[bold yellow]Megamix '{target}' not created: {res.get('reason')}[/bold yellow]")
         else:
             fresh_msg = f" ({res.get('excluded_recent_repeats', 0)} recent repeats excluded)" if exclude_recent_days > 0 else ""
+            folder_msg = f" in folder '{folder}'" if folder else ""
             console.print(
-                f"[bold green]Synthesized Megamix '{target}' with {res.get('total_unique_tracks', 0)} unique tracks on {p.display_name}!{fresh_msg}[/bold green]"
+                f"[bold green]Synthesized Megamix '{target}'{folder_msg} with {res.get('total_unique_tracks', 0)} unique tracks on {p.display_name}!{fresh_msg}[/bold green]"
             )
 
 
@@ -1169,13 +1227,14 @@ def favorites_backup(
     target: str = typer.Option("Favorites Backup", "--target", "-t", help="Target playlist title"),
     mode: str = typer.Option("replace", "--mode", "-m", help="Mode: replace (wipe target first) or append"),
     description: str = typer.Option("Automated backup of favorite/liked tracks", "--desc", "-d", help="Playlist description"),
+    folder: Optional[str] = typer.Option(None, "--folder", "-f", help="Target playlist folder name or ID"),
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
 ) -> None:
     """Mirror favorite/liked tracks into a regular playlist."""
     p = get_active_provider(provider, require_active=True)
     svc = PlaylistService(p)
     try:
-        res = svc.backup_favorites_to_playlist(target_playlist=target, mode=mode, description=description)
+        res = svc.backup_favorites_to_playlist(target_playlist=target, mode=mode, description=description, folder=folder)
     except Exception as e:
         err_console.print(f"[bold red]Backup failed: {e}[/bold red]")
         raise typer.Exit(1)
@@ -1184,10 +1243,11 @@ def favorites_backup(
         console.print_json(data=res)
         return
 
+    folder_str = f"\n[dim]Folder: {res.get('folder')}[/dim]" if res.get("folder") else ""
     console.print(
         Panel(
             f"[bold green]Successfully mirrored {res.get('total_favorites', 0)} favorites into '{target}' on {p.display_name} (mode: {mode}).[/bold green]\n"
-            f"[dim]Playlist ID: {res.get('playlist_id')}[/dim]",
+            f"[dim]Playlist ID: {res.get('playlist_id')}[/dim]{folder_str}",
             title="Favorites Backup Complete",
             border_style="green",
         )

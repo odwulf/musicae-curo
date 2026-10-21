@@ -287,24 +287,26 @@ Jobs are defined declaratively in a YAML file located at `~/.config/curo/jobs.ya
 jobs:
   <job-name>:
     description: "Human-readable summary of what the job does"
+    folder: "Default Folder" # Optional: default playlist folder for all actions in this job
     actions:
       - action: <action_type>
         params:
           <param_name>: <param_value>
+          folder: "Custom Folder" # Optional: overrides job-level folder
 ```
 
 ### Supported Action Types & Parameters
 
 | Action Type | Description | Available Parameters |
 | :--- | :--- | :--- |
-| `backup_daily_discovery` | Archives today's algorithmic Daily Discovery mix into a dated playlist. | - `playlist_name_format` (default: `"Discovery Backup - {date}"`)<br>- `description` (optional custom playlist description) |
-| `create_megamix` | Merges Daily Discovery and all active Daily Mixes into a single deduplicated, shuffled playlist. | - `target_playlist` (default: `"Daily Megamix"`)<br>- `include_discovery` (bool, default: `true`)<br>- `include_daily_mixes` (bool, default: `true`)<br>- `shuffle` (bool, default: `true`)<br>- `mode` (`replace` or `append`, default: `replace`)<br>- `description` (template string)<br>- `limit` (optional integer limit) |
+| `backup_daily_discovery` | Archives today's algorithmic Daily Discovery mix into a dated playlist. | - `playlist_name_format` (default: `"Discovery Backup - {date}"`)<br>- `description` (optional custom playlist description)<br>- `folder` (optional: destination folder name or ID) |
+| `create_megamix` | Merges Daily Discovery and all active Daily Mixes into a single deduplicated, shuffled playlist. | - `target_playlist` (default: `"Daily Megamix"`)<br>- `include_discovery` (bool, default: `true`)<br>- `include_daily_mixes` (bool, default: `true`)<br>- `shuffle` (bool, default: `true`)<br>- `mode` (`replace` or `append`, default: `replace`)<br>- `description` (template string)<br>- `limit` (optional integer limit)<br>- `exclude_recent_days` (integer, default: 0)<br>- `folder` (optional: destination folder name or ID) |
 | `snapshot_all_playlists` | Runs SHA-256 versioned snapshots across all personal playlists, updates track history registry, checks track availability, and sends email notifications. | - `alert_on_unavailable` (bool, default: `true`)<br>- `notify` (bool, default: `true`)<br>- `force_all_mail` (bool, default: `false`) |
 | `snapshot_playlist` | Takes a versioned snapshot of a single designated playlist. | - `playlist` (required: playlist title or ID)<br>- `alert_on_unavailable` (bool, default: `true`) |
 | `snapshot_favorite_tracks` | Takes a versioned SHA-256 snapshot of all favorite/liked tracks, updates registry, and logs availability alerts. | - `alert_on_unavailable` (bool, default: `true`) |
-| `backup_favorites_to_playlist` | Mirrors all favorite/liked tracks into a designated regular playlist with full pagination. | - `target_playlist` (default: `"Favorites Backup"`)<br>- `mode` (`replace` or `append`, default: `replace`)<br>- `description` (optional description) |
+| `backup_favorites_to_playlist` | Mirrors all favorite/liked tracks into a designated regular playlist with full pagination. | - `target_playlist` (default: `"Favorites Backup"`)<br>- `mode` (`replace` or `append`, default: `replace`)<br>- `description` (optional description)<br>- `folder` (optional: destination folder name or ID) |
 | `export_playlist` | Exports a designated playlist to disk in the specified format. | - `playlist` (required: playlist title or ID)<br>- `format` (`json`, `m3u8`, or `csv`, default: `json`) |
-| `sync_playlist` | Synchronizes playlist tracks between providers or within the same provider (`mirror` or `append` modes). | - `source_playlist` (required: title or ID)<br>- `target_playlist` (optional: target title)<br>- `source_provider` (optional: provider name)<br>- `target_provider` (optional: target provider name)<br>- `mode` (`mirror` or `append`, default: `mirror`)<br>- `threshold` (float, default: `0.8`)<br>- `dry_run` (bool, default: `false`)<br>- `create_if_missing` (bool, default: `true`) |
+| `sync_playlist` | Synchronizes playlist tracks between providers or within the same provider (`mirror` or `append` modes). | - `source_playlist` (required: title or ID)<br>- `target_playlist` (optional: target title)<br>- `source_provider` (optional: provider name)<br>- `target_provider` (optional: target provider name)<br>- `mode` (`mirror` or `append`, default: `mirror`)<br>- `threshold` (float, default: `0.8`)<br>- `dry_run` (bool, default: `false`)<br>- `create_if_missing` (bool, default: `true`)<br>- `folder` (optional: destination folder name or ID) |
 
 ### Default Shipped Jobs
 
@@ -414,14 +416,16 @@ curo favorites export [-p <prov>] [--format json|m3u8|csv] [--output <path>]
 ```bash
 curo playlist list
 curo playlist show <id|title>
-curo playlist create <title> [--description <desc>] [--public]
+curo playlist create <title> [--desc <desc>] [--public] [--folder <name|id>]
+curo playlist folders
+curo playlist move <id|title> <folder_name|id>
 curo playlist export <id> [--format json|m3u8|csv] [--output <path>]
 curo playlist snapshot [id] [--no-alert] [--notify] [--all-mail]
 curo playlist alerts [--limit 50]
 curo playlist repair <id> [--threshold 0.8] [--live]
 curo playlist replace <id> --track <id|#pos> --with <id|isrc|upc> [--live]
 curo playlist compare <source_id> <target_id> [--from <prov>] [--to <prov>] [--threshold 0.8]
-curo playlist sync <source_id> [--target <name>] [--from <prov>] [--to <prov>] [--mode mirror|append] [--threshold 0.8] [--live]
+curo playlist sync <source_id> [--target <name>] [--from <prov>] [--to <prov>] [--mode mirror|append] [--threshold 0.8] [--live] [--folder <name|id>]
 ```
 
 ### Albums (`curo album`)
@@ -433,8 +437,16 @@ curo album export <id> [--format json|m3u8|csv] [--output <path>]
 ### Mixes (`curo mix`)
 ```bash
 curo mix list
-curo mix backup-discovery [--playlist-name "Custom Name"]
-curo mix megamix [--mode replace|append] [--limit 100]
+curo mix daily [--format <template>] [--folder <name|id>]
+curo mix megamix [--target <title>] [--mode replace|append] [--exclude-recent-days <N>] [--folder <name|id>]
+```
+
+### Favorites (`curo favorites`)
+```bash
+curo favorites list [--limit <N>]
+curo favorites snapshot [--no-alert]
+curo favorites backup [--target <title>] [--mode replace|append] [--folder <name|id>]
+curo favorites export [--format json|m3u8|csv] [--output <path>]
 ```
 
 ### Automated Jobs (`curo job`)

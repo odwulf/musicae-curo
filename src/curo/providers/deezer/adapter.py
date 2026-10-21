@@ -301,8 +301,10 @@ class DeezerProvider(MusicProvider):
         return [self.to_domain_track(t) for t in raw_tracks]
 
     def create_playlist(
-        self, title: str, description: str = "", is_public: bool = False
+        self, title: str, description: str = "", is_public: bool = False, folder: Optional[str] = None
     ) -> Playlist:
+        if folder:
+            logger.info(f"Deezer does not support playlist folders. Creating '{title}' at root level.")
         try:
             pl_id = self.session.create_playlist(title)
             if hasattr(pl_id, "id") or hasattr(pl_id, "title"):

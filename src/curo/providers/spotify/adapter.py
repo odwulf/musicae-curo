@@ -328,8 +328,10 @@ class SpotifyProvider(MusicProvider):
         return result
 
     def create_playlist(
-        self, title: str, description: str = "", is_public: bool = False
+        self, title: str, description: str = "", is_public: bool = False, folder: Optional[str] = None
     ) -> Playlist:
+        if folder:
+            logger.info(f"Spotify Web API does not support playlist folders. Creating '{title}' at root level.")
         try:
             me = self.session.me() if hasattr(self.session, "me") else self.session.current_user()
             user_id = me.get("id") if isinstance(me, dict) else getattr(me, "id", "me")
