@@ -189,6 +189,51 @@ def test_render_changes_digest_shows_diff_and_version(temp_config: ConfigManager
     assert "- Removed: Dropped Track X by Artist X" in text_body
 
 
+def test_render_changes_digest_shows_relinked_tracks_by_provider(temp_config: ConfigManager):
+    service = EmailService(cfg=temp_config)
+
+    modified_playlists = [
+        {
+            "name": "My Favorites",
+            "playlist_name": "My Favorites",
+            "provider": "tidal",
+            "version": 5,
+            "track_diff": {
+                "added_tracks": [
+                    {"title": "Genuine New Song", "artist": "New Artist"}
+                ],
+                "removed_tracks": [],
+                "relinked_tracks": [
+                    {
+                        "old_id": "12345",
+                        "new_id": "67890",
+                        "title": "Bohemian Rhapsody",
+                        "artist": "Queen",
+                        "match_reason": "isrc",
+                    }
+                ],
+            },
+            "new_alerts_count": 0,
+        }
+    ]
+
+    html_body, text_body = service.render_changes_digest(modified_playlists, provider_name="Tidal")
+
+    # HTML assertions
+    assert "↻ Relinked by TIDAL:" in html_body
+    assert "Bohemian Rhapsody" in html_body
+    assert "Queen" in html_body
+    assert "12345" in html_body
+    assert "67890" in html_body
+    assert "Relinked" in html_body  # 4-column metric card
+    assert "Genuine New Song" in html_body
+
+    # Plain text assertions
+    assert "* Relinked by TIDAL: Bohemian Rhapsody by Queen (ID: 12345 -> 67890)" in text_body
+    assert "+ Added: Genuine New Song by New Artist" in text_body
+    assert "Relinked: 1" in text_body
+
+
 def test_render_changes_digest_excludes_exhaustive_diff_for_megamix(temp_config: ConfigManager):
     service = EmailService(cfg=temp_config)
 
