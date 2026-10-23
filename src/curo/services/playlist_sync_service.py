@@ -96,6 +96,7 @@ class PlaylistSyncService:
         threshold: float = 0.8,
     ) -> Optional[CandidateEvaluation]:
         """Attempt to find and score the best corresponding active track on the target provider."""
+        threshold = threshold / 100.0 if threshold > 1.0 else threshold
         s_id, s_isrc, s_title, s_artist, s_upc, _ = self._extract_track_identifiers(source_track)
 
         # 0. Same provider optimization: exact ID match
@@ -170,6 +171,7 @@ class PlaylistSyncService:
 
     def _tracks_match(self, t1: Any, t2: Any, threshold: float = 0.8) -> Tuple[bool, float, str]:
         """Check if two tracks match between source and target playlists."""
+        threshold = threshold / 100.0 if threshold > 1.0 else threshold
         id1 = str(getattr(t1, "id", ""))
         id2 = str(getattr(t2, "id", ""))
         if id1 and id2 and id1 == id2 and self.source_provider.name == self.target_provider.name:
@@ -194,6 +196,7 @@ class PlaylistSyncService:
         export_path: Optional[Path] = None,
     ) -> Dict[str, Any]:
         """Compare two playlists across providers and calculate diff items."""
+        threshold = threshold / 100.0 if threshold > 1.0 else threshold
         source_pl = self.source_provider.get_playlist(source_identifier)
         if not source_pl:
             raise ValueError(f"Source playlist '{source_identifier}' not found on {self.source_provider.display_name}")
@@ -341,6 +344,7 @@ class PlaylistSyncService:
         folder: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Synchronize playlist tracks from source provider to target provider."""
+        threshold = threshold / 100.0 if threshold > 1.0 else threshold
         source_pl = self.source_provider.get_playlist(source_identifier)
         if not source_pl:
             raise ValueError(f"Source playlist '{source_identifier}' not found on {self.source_provider.display_name}")
