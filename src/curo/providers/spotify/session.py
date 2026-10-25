@@ -140,7 +140,15 @@ class SpotifySessionManager:
             self.config.secure_file(self.session_file)
             return sp
         except Exception as e:
-            raise SpotifyAuthenticationError(f"Spotify authentication verification failed: {e}")
+            err_str = str(e)
+            if "Active premium subscription required for the owner of the app" in err_str:
+                raise SpotifyAuthenticationError(
+                    "Spotify Developer Platform Error: An active Spotify Premium subscription "
+                    "is required for the account that owns the Developer Application.\n"
+                    "Please create the Spotify App at https://developer.spotify.com/dashboard "
+                    "using a Spotify Premium account (Individual, Duo, or Family)."
+                ) from e
+            raise SpotifyAuthenticationError(f"Spotify authentication verification failed: {e}") from e
 
     def login_interactive(self) -> spotipy.Spotify:
         """Interactive authorization flow for Spotify OAuth2."""
@@ -151,8 +159,9 @@ class SpotifySessionManager:
             console.print(
                 Panel(
                     "[bold cyan]Spotify Developer Credentials Setup[/bold cyan]\n\n"
-                    "To connect Spotify with Musicae Curo, you need a free Spotify Developer App:\n"
+                    "To connect Spotify with Musicae Curo, you need a Spotify Developer App:\n"
                     " 1. Go to [bold underline]https://developer.spotify.com/dashboard[/bold underline]\n"
+                    "    ([bold yellow]Note: Spotify requires the app owner account to have an active Premium subscription[/bold yellow])\n"
                     " 2. Create an App (e.g. named 'Musicae Curo')\n"
                     f" 3. In App Settings, add Redirect URI: [bold green]{DEFAULT_REDIRECT_URI}[/bold green]\n"
                     " 4. Copy your Client ID and Client Secret.",
@@ -192,7 +201,19 @@ class SpotifySessionManager:
 
         self.config.secure_file(self.session_file)
         sp = spotipy.Spotify(auth_manager=auth_manager)
-        user = sp.current_user()
+        try:
+            user = sp.current_user() or {}
+        except Exception as e:
+            err_str = str(e)
+            if "Active premium subscription required for the owner of the app" in err_str:
+                raise SpotifyAuthenticationError(
+                    "Spotify Developer Platform Error: An active Spotify Premium subscription "
+                    "is required for the account that owns the Developer Application.\n"
+                    "Please create the Spotify App at https://developer.spotify.com/dashboard "
+                    "using a Spotify Premium account (Individual, Duo, or Family)."
+                ) from e
+            raise SpotifyAuthenticationError(f"Spotify authentication verification failed: {e}") from e
+
         name = user.get("display_name") or user.get("id") or "Spotify User"
         console.print(
             f"[bold green]Successfully authenticated with Spotify as {name} (ID: {user.get('id')})![/bold green]"
