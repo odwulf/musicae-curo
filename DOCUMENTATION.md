@@ -270,7 +270,7 @@ Example crontab entry:
 ### Global Options
 - `-c, --config <path>`: Custom configuration directory (default: `~/.config/curo`).
 - `-p, --provider <name>`: Target streaming provider (e.g. `tidal`, `deezer`, `spotify`).
-- `-q, --quiet`: Suppress banners and progress bars (ideal for cron).
+- `-q, --quiet`: Suppress banners, tables, and progress bars (ideal for cron). Can be placed globally (e.g. `curo --quiet ...`) or directly on subcommands (e.g. `curo job run ... --quiet`).
 - `--json`: Output machine-readable JSON.
 - `-v, --verbose`: Enable debug logging.
 
@@ -316,9 +316,9 @@ curo mix megamix [--mode replace|append] [--limit 100]
 
 ### Automated Jobs (`curo job`)
 ```bash
-curo job list                   # List defined jobs in jobs.yaml
-curo job run <job_name>         # Execute a job headless
-curo job cron-help              # Generate Linux crontab syntax
+curo job list                                   # List defined jobs in jobs.yaml
+curo job run <job_name> [-q, --quiet] [--json]  # Execute a job headless (quiet for cron)
+curo job cron-help                              # Generate Linux crontab syntax
 ```
 
 ### Notifications (`curo notify`)
