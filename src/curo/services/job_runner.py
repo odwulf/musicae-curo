@@ -153,11 +153,13 @@ class JobRunner:
                     )
 
                     sync_svc = PlaylistSyncService(source_provider=src_p, target_provider=tgt_p, cfg=self.config)
+                    raw_thresh = params.get("threshold", 80.0)
+                    thresh_ratio = float(raw_thresh) / 100.0 if float(raw_thresh) > 1.0 else float(raw_thresh)
                     res = sync_svc.sync_playlists(
                         source_identifier=params["source_playlist"],
                         target_identifier=params.get("target_playlist"),
                         mode=params.get("mode", "mirror"),
-                        threshold=params.get("threshold", 0.8),
+                        threshold=thresh_ratio,
                         dry_run=params.get("dry_run", False),
                         create_if_missing=params.get("create_if_missing", True),
                         folder=folder,

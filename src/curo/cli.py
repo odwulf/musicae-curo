@@ -67,6 +67,20 @@ def setup_logging(verbose: bool, log_file: Optional[Path] = None) -> None:
     )
 
 
+def parse_threshold_pct(val: Any) -> float:
+    """Parse percentage threshold like '80', '80%', '80.0', or legacy '0.8'."""
+    s = str(val).strip().rstrip("%")
+    try:
+        v = float(s)
+    except ValueError:
+        raise typer.BadParameter(f"Threshold must be a valid number, got '{val}'")
+    if v < 0 or v > 100:
+        raise typer.BadParameter(f"Threshold must be between 0 and 100%, got {v}")
+    if 0.0 < v <= 1.0:
+        return v * 100.0
+    return v
+
+
 # ---------------------------------------------------------------------------
 # Global State
 # ---------------------------------------------------------------------------
@@ -517,7 +531,13 @@ def playlist_alerts(
 @playlist_app.command("repair")
 def playlist_repair(
     identifier: str = typer.Argument(..., help="Playlist title or ID"),
-    threshold: float = typer.Option(0.8, "--threshold", "-t", help="Minimum similarity threshold (default: 0.8 / 80%)"),
+    threshold: float = typer.Option(
+        80.0,
+        "--threshold",
+        "-t",
+        parser=parse_threshold_pct,
+        help="Minimum similarity threshold percentage (0 - 100, default: 80)",
+    ),
     live: bool = typer.Option(False, "--live", help="Apply replacements live on streaming provider (default: dry-run)"),
     all_tracks: bool = typer.Option(False, "--all-tracks", help="Inspect all tracks, not just unavailable ones"),
     export: Optional[Path] = typer.Option(None, "--export", help="Custom JSON report export path"),
@@ -530,11 +550,12 @@ def playlist_repair(
     """Analyze unavailable tracks in a playlist, score replacements, and optionally repair."""
     p = get_active_provider(provider, require_active=True)
     repair_svc = PlaylistRepairService(p, cfg=state["config"])
+    threshold_ratio = threshold / 100.0 if threshold > 1.0 else threshold
 
     try:
         report = repair_svc.analyze_and_repair(
             identifier=identifier,
-            threshold=threshold,
+            threshold=threshold_ratio,
             dry_run=not live,
             all_tracks=all_tracks,
             export_path=export,
@@ -553,7 +574,7 @@ def playlist_repair(
 
     unavail_count = report["unavailable_tracks_count"]
     mode_str = "[bold yellow]DRY-RUN (Simulated)[/bold yellow]" if not live else "[bold green]LIVE (Mutating)[/bold green]"
-    title = f"Playlist Repair: {report['playlist_name']} ({mode_str}, Threshold: {int(threshold * 100)}%)"
+    title = f"Playlist Repair: {report['playlist_name']} ({mode_str}, Threshold: {int(threshold_ratio * 100)}%)"
 
     if unavail_count == 0:
         console.print(
@@ -670,7 +691,13 @@ def playlist_compare(
     target_playlist: str = typer.Argument(..., help="Target playlist title or ID"),
     from_provider: Optional[str] = typer.Option(None, "--from", "--from-provider", help="Source streaming provider [default: active provider]"),
     to_provider: Optional[str] = typer.Option(None, "--to", "--to-provider", help="Target streaming provider [default: source provider]"),
-    threshold: float = typer.Option(0.8, "--threshold", "-t", help="Minimum similarity threshold (0.0 - 1.0, default: 0.8)"),
+    threshold: float = typer.Option(
+        80.0,
+        "--threshold",
+        "-t",
+        parser=parse_threshold_pct,
+        help="Minimum similarity threshold percentage (0 - 100, default: 80)",
+    ),
     export: Optional[Path] = typer.Option(None, "--export", help="Custom JSON report export path"),
 ) -> None:
     """Compare two playlists across providers or within the same provider."""
@@ -679,12 +706,13 @@ def playlist_compare(
     tgt_p = get_active_provider(tgt_name, require_active=True)
 
     sync_svc = PlaylistSyncService(source_provider=src_p, target_provider=tgt_p, cfg=state["config"])
+    threshold_ratio = threshold / 100.0 if threshold > 1.0 else threshold
 
     try:
         report = sync_svc.compare_playlists(
             source_identifier=source_playlist,
             target_identifier=target_playlist,
-            threshold=threshold,
+            threshold=threshold_ratio,
             export_path=export,
         )
     except Exception as e:
@@ -753,7 +781,13 @@ def playlist_sync(
     from_provider: Optional[str] = typer.Option(None, "--from", "--from-provider", help="Source streaming provider [default: active provider]"),
     to_provider: Optional[str] = typer.Option(None, "--to", "--to-provider", help="Target streaming provider [default: source provider]"),
     mode: str = typer.Option("mirror", "--mode", "-m", help="Sync mode: 'mirror' (exact sequence) or 'append' (add missing only)"),
-    threshold: float = typer.Option(0.8, "--threshold", "-t", help="Minimum similarity threshold (0.0 - 1.0, default: 0.8)"),
+    threshold: float = typer.Option(
+        80.0,
+        "--threshold",
+        "-t",
+        parser=parse_threshold_pct,
+        help="Minimum similarity threshold percentage (0 - 100, default: 80)",
+    ),
     live: bool = typer.Option(False, "--live", help="Apply mutations live on target provider (default: dry-run)"),
     no_create: bool = typer.Option(False, "--no-create", help="Fail if target playlist does not exist instead of auto-creating"),
     export: Optional[Path] = typer.Option(None, "--export", help="Custom JSON report export path"),
@@ -764,13 +798,14 @@ def playlist_sync(
     tgt_p = get_active_provider(tgt_name, require_active=True)
 
     sync_svc = PlaylistSyncService(source_provider=src_p, target_provider=tgt_p, cfg=state["config"])
+    threshold_ratio = threshold / 100.0 if threshold > 1.0 else threshold
 
     try:
         report = sync_svc.sync_playlists(
             source_identifier=source_playlist,
             target_identifier=target_playlist,
             mode=mode,
-            threshold=threshold,
+            threshold=threshold_ratio,
             dry_run=not live,
             create_if_missing=not no_create,
             export_path=export,

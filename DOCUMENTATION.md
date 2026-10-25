@@ -248,7 +248,7 @@ When streaming services delist or retire a track, its metadata (such as ISRC or 
 | **Acoustic Penalty** | -35 | Penalty if candidate is "Acoustic" while original was standard (requires manual approval). |
 
 ### Replacement Safety Safeguards
-- **100% Threshold Default**: Default CLI runs require an exact match ($\ge 0.80$ with `--threshold 0.8`).
+- **Threshold Default**: Default similarity threshold requires $\ge 80\%$ match (`--threshold 80`, accepting integers, percentages like `80%`, or legacy decimals like `0.8`).
 - **Dry-Run by Default**: Generates diagnostic reports in `./reports/repair_<slug>_<date>.json` without modifying streaming playlists. Pass `--live` to mutate playlists.
 - **Atomic Two-Step Swap**: When replacing a track live:
   1. Calls `provider.add_tracks_to_playlist(pl_id, [new_id], position=idx)`.
@@ -306,7 +306,7 @@ jobs:
 | `snapshot_favorite_tracks` | Takes a versioned SHA-256 snapshot of all favorite/liked tracks, updates registry, and logs availability alerts. | - `alert_on_unavailable` (bool, default: `true`) |
 | `backup_favorites_to_playlist` | Mirrors all favorite/liked tracks into a designated regular playlist with full pagination. | - `target_playlist` (default: `"Favorites Backup"`)<br>- `mode` (`replace` or `append`, default: `replace`)<br>- `description` (optional description)<br>- `folder` (optional: destination folder name or ID) |
 | `export_playlist` | Exports a designated playlist to disk in the specified format. | - `playlist` (required: playlist title or ID)<br>- `format` (`json`, `m3u8`, or `csv`, default: `json`) |
-| `sync_playlist` | Synchronizes playlist tracks between providers or within the same provider (`mirror` or `append` modes). | - `source_playlist` (required: title or ID)<br>- `target_playlist` (optional: target title)<br>- `source_provider` (optional: provider name)<br>- `target_provider` (optional: target provider name)<br>- `mode` (`mirror` or `append`, default: `mirror`)<br>- `threshold` (float, default: `0.8`)<br>- `dry_run` (bool, default: `false`)<br>- `create_if_missing` (bool, default: `true`)<br>- `folder` (optional: destination folder name or ID) |
+| `sync_playlist` | Synchronizes playlist tracks between providers or within the same provider (`mirror` or `append` modes). | - `source_playlist` (required: title or ID)<br>- `target_playlist` (optional: target title)<br>- `source_provider` (optional: provider name)<br>- `target_provider` (optional: target provider name)<br>- `mode` (`mirror` or `append`, default: `mirror`)<br>- `threshold` (percentage float, default: `80`)<br>- `dry_run` (bool, default: `false`)<br>- `create_if_missing` (bool, default: `true`)<br>- `folder` (optional: destination folder name or ID) |
 
 ### Default Shipped Jobs
 
@@ -422,10 +422,10 @@ curo playlist move <id|title> <folder_name|id>
 curo playlist export <id> [--format json|m3u8|csv] [--output <path>]
 curo playlist snapshot [id] [--no-alert] [--notify] [--all-mail]
 curo playlist alerts [--limit 50]
-curo playlist repair <id> [--threshold 0.8] [--live]
+curo playlist repair <id> [--threshold 80] [--live]
 curo playlist replace <id> --track <id|#pos> --with <id|isrc|upc> [--live]
-curo playlist compare <source_id> <target_id> [--from <prov>] [--to <prov>] [--threshold 0.8]
-curo playlist sync <source_id> [--target <name>] [--from <prov>] [--to <prov>] [--mode mirror|append] [--threshold 0.8] [--live] [--folder <name|id>]
+curo playlist compare <source_id> <target_id> [--from <prov>] [--to <prov>] [--threshold 80]
+curo playlist sync <source_id> [--target <name>] [--from <prov>] [--to <prov>] [--mode mirror|append] [--threshold 80] [--live] [--folder <name|id>]
 ```
 
 ### Albums (`curo album`)

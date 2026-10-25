@@ -402,3 +402,70 @@ def test_cli_playlist_repair_table_output(tmp_path: Path, monkeypatch):
     assert "534098519" in res.stdout
     assert "Full diagnostic report written to:" in res.stdout
 
+
+def test_cli_playlist_repair_threshold_percentage_inputs(tmp_path: Path, monkeypatch):
+    from typer.testing import CliRunner
+    from curo.cli import parse_threshold_pct
+    import typer
+    import pytest
+
+    # Test parser function directly
+    assert parse_threshold_pct("80") == 80.0
+    assert parse_threshold_pct("80%") == 80.0
+    assert parse_threshold_pct("85.5") == 85.5
+    assert parse_threshold_pct("85.5%") == 85.5
+    assert parse_threshold_pct("0.8") == 80.0
+    assert parse_threshold_pct("1.0") == 100.0
+    assert parse_threshold_pct("100") == 100.0
+
+    with pytest.raises(typer.BadParameter):
+        parse_threshold_pct("invalid")
+
+    with pytest.raises(typer.BadParameter):
+        parse_threshold_pct("150")
+
+    with pytest.raises(typer.BadParameter):
+        parse_threshold_pct("-5")
+
+    # Test CLI invocation with percent argument
+    temp_cfg = ConfigManager(custom_config_dir=tmp_path)
+    monkeypatch.setitem(state, "config", temp_cfg)
+
+    session = MagicMock()
+    pl = MagicMock(spec=UserPlaylist)
+    pl.id = "pl-thresh-test"
+    pl.name = "Threshold Test Playlist"
+    pl.tracks.return_value = []
+    session.playlist.return_value = pl
+
+    provider = TidalProvider(session=session, cfg=temp_cfg)
+    monkeypatch.setattr("curo.cli.get_active_provider", lambda *args, **kwargs: provider)
+
+    cli_runner = CliRunner(env={"COLUMNS": "180"})
+
+    # 1. Test --threshold 80 in JSON mode
+    res80_json = cli_runner.invoke(app, ["--json", "playlist", "repair", "pl-thresh-test", "--threshold", "80"])
+    assert res80_json.exit_code == 0
+    data80 = json.loads(res80_json.stdout)
+    assert data80["threshold_configured"] == 0.8
+    assert data80["threshold_percent"] == 80.0
+
+    # 2. Test --threshold 85%
+    res85 = cli_runner.invoke(app, ["--json", "playlist", "repair", "pl-thresh-test", "-t", "85%"])
+    assert res85.exit_code == 0
+    data85 = json.loads(res85.stdout)
+    assert data85["threshold_configured"] == 0.85
+    assert data85["threshold_percent"] == 85.0
+
+    # 3. Test legacy --threshold 0.8
+    res_dec = cli_runner.invoke(app, ["--json", "playlist", "repair", "pl-thresh-test", "--threshold", "0.8"])
+    assert res_dec.exit_code == 0
+    data_dec = json.loads(res_dec.stdout)
+    assert data_dec["threshold_configured"] == 0.8
+    assert data_dec["threshold_percent"] == 80.0
+
+    # 4. Test terminal title formatting
+    res_term = cli_runner.invoke(app, ["playlist", "repair", "pl-thresh-test", "--threshold", "80"])
+    assert res_term.exit_code == 0
+    assert "Threshold: 80%" in res_term.stdout
+

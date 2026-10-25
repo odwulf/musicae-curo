@@ -51,7 +51,7 @@ class PlaylistRepairService:
     def analyze_and_repair(
         self,
         identifier: str,
-        threshold: float = 0.8,
+        threshold: float = 80.0,
         dry_run: bool = True,
         all_tracks: bool = False,
         export_path: Optional[Path] = None,
@@ -61,6 +61,7 @@ class PlaylistRepairService:
         upc: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Scan playlist for unavailable tracks, score candidates, and optionally apply replacements."""
+        threshold_ratio = threshold / 100.0 if threshold > 1.0 else threshold
         playlist = self.playlist_service.get_playlist(identifier)
         if not playlist:
             raise ValueError(f"Playlist not found: {identifier}")
@@ -142,7 +143,7 @@ class PlaylistRepairService:
 
             for c in candidates:
                 d = c.to_dict()
-                d["meets_threshold"] = bool(c.score >= threshold and not c.disqualified)
+                d["meets_threshold"] = bool(c.score >= threshold_ratio and not c.disqualified)
                 cand_dicts.append(d)
 
             if cand_dicts:
@@ -220,7 +221,8 @@ class PlaylistRepairService:
             "playlist_name": pl_name,
             "total_tracks": len(tracks),
             "unavailable_tracks_count": len(unavailable_reports),
-            "threshold_configured": threshold,
+            "threshold_configured": threshold_ratio,
+            "threshold_percent": round(threshold_ratio * 100, 1),
             "dry_run": dry_run,
             "replacements_applied": replacements_applied,
             "unavailable_tracks": unavailable_reports,
