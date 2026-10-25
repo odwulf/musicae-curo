@@ -104,6 +104,31 @@ def test_add_tracks_strictly_validates_position_not_none(mock_session, mock_prov
     assert "position" not in call_kwargs or call_kwargs["position"] is not None
 
 
+def test_add_tracks_412_etag_precondition_retry(mock_session, mock_provider):
+    """Verify that HTTP 412 (ETag mismatch) triggers refresh and retry."""
+    pl1 = MagicMock(id="target-pl-412")
+    pl1.name = "Retry Playlist"
+
+    attempts = {"count": 0}
+
+    def _mock_add_with_412(*args, **kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            err = Exception("412 Client Error: Precondition Failed for url: https://api.tidal.com/v1/playlists/target-pl-412/items")
+            raise err
+        return ["t-1", "t-2"]
+
+    pl1.add.side_effect = _mock_add_with_412
+    mock_session.playlist.return_value = pl1
+
+    svc = PlaylistService(mock_provider)
+    added = svc.add_tracks(playlist="target-pl-412", track_ids=["t-1", "t-2"])
+
+    assert added is True
+    assert attempts["count"] == 2
+    assert pl1.add.call_count == 2
+
+
 def test_export_playlist_json_and_m3u(mock_session, mock_provider):
     pl = MagicMock(id="pl-exp")
     pl.name = "Chillhop"
