@@ -135,3 +135,38 @@ def test_backup_daily_discovery(mock_session, mock_provider):
     assert res["success"] is True
     assert res["playlist_name"] == f"Discovery Backup - {today}"
     assert res["tracks_added"] == 2
+
+
+def test_backup_daily_discovery_with_mix_items_attribute(mock_session, mock_provider):
+    """Ensure Mix objects having .items() (as in real tidalapi.mix.Mix) work without error."""
+    today = datetime.date.today().isoformat()
+    t1 = make_mock_track(333, "Discovery Real 1")
+    t2 = make_mock_track(444, "Discovery Real 2")
+
+    disc = MagicMock(id="m-disc-real", title="Daily Discovery", mix_type="discovery")
+    mock_session.mixes.return_value = [disc]
+
+    # Simulate real tidalapi.mix.Mix: has .items(), but NOT .tracks()
+    class RealTidalMix:
+        def __init__(self, items):
+            self._items = items
+
+        def items(self):
+            return self._items
+
+    mock_session.mix.return_value = RealTidalMix([t1, t2])
+
+    backup_pl = MagicMock(id="bk-pl-real", name=f"Discovery Backup - {today}")
+    svc = MixService(mock_provider)
+    svc.playlist_service.get_or_create_playlist = MagicMock(return_value=backup_pl)
+    svc.playlist_service.add_tracks = MagicMock(return_value=2)
+
+    res = svc.backup_daily_discovery()
+
+    assert res["success"] is True
+    assert res["playlist_name"] == f"Discovery Backup - {today}"
+    assert res["tracks_added"] == 2
+    tracks = mock_provider.get_mix_tracks("m-disc-real")
+    assert len(tracks) == 2
+    assert tracks[0].id == "333"
+    assert tracks[1].id == "444"

@@ -69,11 +69,7 @@ class MixService:
             raise RuntimeError(f"Could not locate Daily Discovery mix on {self.provider.display_name}.")
 
         mix_id = getattr(discovery_mix, "id", None)
-        tracks = (
-            self.provider.get_mix_tracks(str(mix_id))
-            if mix_id
-            else (discovery_mix.items() if hasattr(discovery_mix, "items") else [])
-        )
+        tracks = self.provider.get_mix_tracks(str(mix_id)) if mix_id else []
         track_ids = [str(t.id) for t in tracks if getattr(t, "id", None)]
 
         if not track_ids:
@@ -141,11 +137,7 @@ class MixService:
             m_title = getattr(m, "title", None) or getattr(m, "name", "Mix")
             mix_id = getattr(m, "id", None)
             try:
-                items = (
-                    self.provider.get_mix_tracks(str(mix_id))
-                    if mix_id
-                    else (m.items() if hasattr(m, "items") else [])
-                )
+                items = self.provider.get_mix_tracks(str(mix_id)) if mix_id else []
             except Exception as e:
                 logger.warning(f"Failed to fetch tracks for mix '{m_title}': {e}")
                 items = []
