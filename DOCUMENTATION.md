@@ -380,12 +380,91 @@ Example crontab entry:
 0 6 * * * /usr/bin/python3 -m curo.cli job run daily-discovery-megamix --quiet >> ~/.config/curo/cron.log 2>&1
 ```
 
+### Multi-Account & Multi-User Setup (Running Multiple Streaming Accounts)
+
+Musicae Curo is fully multi-tenant and relocatable. You can run as many independent streaming accounts (e.g. personal, partner, or family profiles) as you want under the exact same Linux system user without conflict.
+
+#### State Isolation & Architecture
+All credentials and runtime data are strictly self-contained within the designated configuration directory:
+* **OAuth Credentials**: `<config_dir>/<provider>_session.json` (e.g., `tidal_session.json`).
+* **Declarative Jobs**: `<config_dir>/jobs.yaml`.
+* **Playlists & Track Registry**: `<config_dir>/snapshots/` and `<config_dir>/snapshots/index.json`.
+* **Megamix Deduplication History**: `<config_dir>/megamix_history.json`.
+* **Logs & Alerts**: `<config_dir>/curo.log` and `<config_dir>/logs/availability_alerts.log`.
+* **Email & App Configuration**: `<config_dir>/config.json` and `<config_dir>/notification_state.json`.
+
+Because Curo touches no external or global state, pointing to a different folder creates a fully isolated sandbox.
+
+#### Redirection Mechanisms
+You can redirect Curo to another profile directory using either:
+1. **Global CLI Option (`-c` / `--config`)**:
+   ```bash
+   curo -c ~/.config/curo-partner <command>
+   ```
+   *(Note: The global `-c` flag must precede subcommands, e.g., `curo -c <dir> job run ...`)*
+2. **Environment Variable (`CURO_CONFIG_DIR`)**:
+   ```bash
+   CURO_CONFIG_DIR=~/.config/curo-partner curo <command>
+   ```
+
+#### Step-by-Step Setup for a Second Account
+
+1. **Authenticate the Second Account**:
+   ```bash
+   curo -c ~/.config/curo-partner auth login -p tidal
+   ```
+   Open the generated device login link in an incognito window or in a browser session logged into the second account. Curo creates `~/.config/curo-partner/` with a dedicated session and initial `jobs.yaml`.
+
+2. **Tailor the Second Account's `jobs.yaml`**:
+   Edit `~/.config/curo-partner/jobs.yaml` to specify separate target playlist names, folder locations, or email notification recipients:
+   ```yaml
+   jobs:
+     daily-discovery-megamix:
+       actions:
+         - action: backup_daily_discovery
+           params:
+             playlist_name_format: "Discovery Backup - {date}"
+             folder: "Partner Discovery"
+         - action: create_megamix
+           params:
+             target_playlist: "Partner Daily Megamix"
+   ```
+
+3. **Schedule Both Accounts in Linux `crontab`**:
+   Run `crontab -e` and register both profiles under the same Linux account:
+   ```crontab
+   # Account 1 (default ~/.config/curo)
+   0 6 * * * /opt/curo/.venv/bin/curo job run daily-discovery-megamix --quiet >> ~/.config/curo/cron.log 2>&1
+
+   # Account 2 (~/.config/curo-partner)
+   15 6 * * * /opt/curo/.venv/bin/curo -c ~/.config/curo-partner job run daily-discovery-megamix --quiet >> ~/.config/curo-partner/cron.log 2>&1
+   ```
+
+#### Sandboxing & Process Isolation
+
+* **Filesystem Permissions**: Curo automatically applies POSIX `0700` directory permissions and `0600` file permissions to prevent unauthorized access across users.
+* **Systemd User Units (`systemd --user`)**: If you prefer systemd timers over cron, create a parameterized service `~/.config/systemd/user/curo@.service`:
+  ```ini
+  [Unit]
+  Description=Musicae Curo Automation (%i)
+
+  [Service]
+  Type=oneshot
+  Environment="CURO_CONFIG_DIR=%h/.config/curo-%i"
+  ExecStart=/opt/curo/.venv/bin/curo job run daily-discovery-megamix --quiet
+  ```
+  Then instantiate with `systemctl --user enable --now curo@primary.timer` and `curo@partner.timer`.
+* **Containers (Docker / Podman)**: For complete OS-level containerization, mount the respective host directories into the container's `/root/.config/curo`:
+  ```bash
+  docker run --rm -v ~/.config/curo-partner:/root/.config/curo curo job run daily-discovery-megamix
+  ```
+
 ---
 
 ## 8. CLI Command Reference
 
 ### Global Options
-- `-c, --config <path>`: Custom configuration directory (default: `~/.config/curo`).
+- `-c, --config <path>`: Custom configuration directory (default: `~/.config/curo`, or overridden by `CURO_CONFIG_DIR` environment variable). Enables running multiple streaming accounts concurrently.
 - `-p, --provider <name>`: Target streaming provider (e.g. `tidal`, `deezer`, `spotify`).
 - `-q, --quiet`: Suppress banners, tables, and progress bars (ideal for cron). Can be placed globally (e.g. `curo --quiet ...`) or directly on subcommands (e.g. `curo job run ... --quiet`).
 - `--json`: Output machine-readable JSON.

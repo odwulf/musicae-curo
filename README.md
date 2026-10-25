@@ -42,6 +42,7 @@ Musicae Curo (*Latin: "I care for music"*) is a modular, provider-agnostic music
   - Fully configurable SMTP settings including support for port 25, 587 (STARTTLS), or 465 (SSL).
 - **Headless Server & Cron Automation**:
   - Browserless device code authorization flow (`curo auth login`).
+  - Multi-account isolation: Run multiple independent streaming accounts concurrently under the same Linux user via `-c / --config <dir>` or `CURO_CONFIG_DIR`.
   - POSIX file security permissions (`0600` for session files, `0700` for config directories).
   - Silent token refresh prevents auth expiration during unattended headless cron runs.
   - Declarative job pipeline (`jobs.yaml`) with built-in crontab generator (`curo job cron-help`).
@@ -162,6 +163,17 @@ uv run curo job cron-help
 # Edit crontab
 crontab -e
 ```
+
+### 9. Multi-Account Automation (Multiple Streaming Users)
+Run a second streaming account under the same Linux user without cross-contamination:
+```bash
+# Log in with second account (creates isolated config directory)
+uv run curo -c ~/.config/curo-partner auth login -p tidal
+
+# Run or schedule jobs independently
+uv run curo -c ~/.config/curo-partner job run daily-discovery-megamix --quiet
+```
+*See the [Multi-Account Setup Guide](DOCUMENTATION.md#multi-account--multi-user-setup-running-multiple-streaming-accounts) for details and crontab examples.*
 
 ---
 
