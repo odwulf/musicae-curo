@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import datetime
+import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 
 DEFAULT_JOBS_YAML = """# tidal-cli automated job definitions
@@ -35,6 +37,7 @@ jobs:
       - action: snapshot_all_playlists
         params:
           alert_on_unavailable: true
+          notify: true
 """
 
 
@@ -43,6 +46,25 @@ class AppSettings(BaseModel):
     log_level: str = Field(default="INFO")
     timeout_seconds: int = Field(default=30)
     chunk_size: int = Field(default=50)  # max tracks per add_tracks API call
+
+
+class EmailConfig(BaseModel):
+    """SMTP email notification settings."""
+    smtp_host: Optional[str] = Field(default=None, description="SMTP server host (e.g. smtp.gmail.com)")
+    smtp_port: int = Field(default=587, description="SMTP server port (e.g. 587 for STARTTLS, 465 for SSL)")
+    smtp_user: Optional[str] = Field(default=None, description="Username for SMTP authentication")
+    smtp_password: Optional[str] = Field(default=None, description="Password for SMTP authentication")
+    use_tls: bool = Field(default=True, description="Enable STARTTLS encryption")
+    use_ssl: bool = Field(default=False, description="Enable direct SSL encryption")
+    from_address: Optional[str] = Field(default=None, description="Sender email address")
+    to_address: Optional[str] = Field(default=None, description="Recipient email address (or comma-separated list)")
+    send_on_changes: bool = Field(default=True, description="Send email when a playlist modification is detected")
+    send_on_alerts: bool = Field(default=True, description="Send email when an unavailable track alert is detected")
+
+    @property
+    def is_configured(self) -> bool:
+        """Returns True if the minimum required SMTP fields are configured."""
+        return bool(self.smtp_host and self.to_address)
 
 
 class ConfigManager:
@@ -57,12 +79,14 @@ class ConfigManager:
             self.config_dir = Path.home() / ".config" / "tidal-cli"
 
         self.session_file = self.config_dir / "session.json"
+        self.config_file = self.config_dir / "config.json"
         self.jobs_file = self.config_dir / "jobs.yaml"
         self.log_file = self.config_dir / "tidal-cli.log"
         self.snapshots_dir = self.config_dir / "snapshots"
         self.track_registry_file = self.snapshots_dir / "index.json"
         self.logs_dir = self.config_dir / "logs"
         self.alerts_log_file = self.logs_dir / "availability_alerts.log"
+        self.notification_state_file = self.config_dir / "notification_state.json"
 
     def ensure_config_dir(self) -> Path:
         """Create config directory with strict permissions on POSIX systems."""
@@ -91,6 +115,89 @@ class ConfigManager:
             self.jobs_file.write_text(DEFAULT_JOBS_YAML, encoding="utf-8")
             self.secure_file(self.jobs_file)
         return self.jobs_file
+
+    def get_email_config(self) -> EmailConfig:
+        """Load email notification config from config.json and environment variables."""
+        cfg_dict: Dict[str, Any] = {}
+        if self.config_file.exists():
+            try:
+                with open(self.config_file, "r", encoding="utf-8") as f:
+                    data = json.load(f) or {}
+                    cfg_dict = data.get("email") or data.get("smtp") or {}
+            except Exception:
+                cfg_dict = {}
+
+        # Environment variable overrides
+        if "TIDAL_SMTP_HOST" in os.environ:
+            cfg_dict["smtp_host"] = os.environ["TIDAL_SMTP_HOST"]
+        if "TIDAL_SMTP_PORT" in os.environ:
+            try:
+                cfg_dict["smtp_port"] = int(os.environ["TIDAL_SMTP_PORT"])
+            except ValueError:
+                pass
+        if "TIDAL_SMTP_USER" in os.environ:
+            cfg_dict["smtp_user"] = os.environ["TIDAL_SMTP_USER"]
+        if "TIDAL_SMTP_PASSWORD" in os.environ:
+            cfg_dict["smtp_password"] = os.environ["TIDAL_SMTP_PASSWORD"]
+        if "TIDAL_SMTP_TLS" in os.environ:
+            cfg_dict["use_tls"] = os.environ["TIDAL_SMTP_TLS"].lower() in ("1", "true", "yes")
+        if "TIDAL_SMTP_SSL" in os.environ:
+            cfg_dict["use_ssl"] = os.environ["TIDAL_SMTP_SSL"].lower() in ("1", "true", "yes")
+        if "TIDAL_EMAIL_FROM" in os.environ:
+            cfg_dict["from_address"] = os.environ["TIDAL_EMAIL_FROM"]
+        if "TIDAL_EMAIL_TO" in os.environ:
+            cfg_dict["to_address"] = os.environ["TIDAL_EMAIL_TO"]
+
+        return EmailConfig(**cfg_dict)
+
+    def save_email_config(self, email_cfg: EmailConfig) -> None:
+        """Persist email configuration to config.json with secure file permissions."""
+        self.ensure_config_dir()
+        existing_data: Dict[str, Any] = {}
+        if self.config_file.exists():
+            try:
+                with open(self.config_file, "r", encoding="utf-8") as f:
+                    existing_data = json.load(f) or {}
+            except Exception:
+                existing_data = {}
+
+        existing_data["email"] = email_cfg.model_dump(exclude_none=True)
+        with open(self.config_file, "w", encoding="utf-8") as f:
+            json.dump(existing_data, f, indent=2, ensure_ascii=False)
+        self.secure_file(self.config_file)
+
+    def has_email_sent_before(self) -> bool:
+        """Check whether a notification email has ever been sent previously."""
+        if not self.notification_state_file.exists():
+            return False
+        try:
+            with open(self.notification_state_file, "r", encoding="utf-8") as f:
+                data = json.load(f) or {}
+                return bool(data.get("first_email_sent_at"))
+        except Exception:
+            return False
+
+    def mark_email_sent(self, subject: str = "") -> None:
+        """Record that an email was dispatched, preserving first_email_sent_at timestamp."""
+        self.ensure_config_dir()
+        data: Dict[str, Any] = {}
+        if self.notification_state_file.exists():
+            try:
+                with open(self.notification_state_file, "r", encoding="utf-8") as f:
+                    data = json.load(f) or {}
+            except Exception:
+                data = {}
+
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        if not data.get("first_email_sent_at"):
+            data["first_email_sent_at"] = now_iso
+        data["last_email_sent_at"] = now_iso
+        if subject:
+            data["last_email_subject"] = subject
+
+        with open(self.notification_state_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        self.secure_file(self.notification_state_file)
 
 
 # Global default configuration manager instance

@@ -66,7 +66,19 @@ uv run tidal-cli playlist repair "My Playlist"
 uv run tidal-cli playlist repair "My Playlist" --live
 ```
 
-### 6. Setup Linux Server Cron Job
+### 6. Email Notifications (Daily Change Digest & Baseline)
+```bash
+# Configure SMTP credentials (e.g. port 25 with STARTTLS)
+uv run tidal-cli notify config --host mail.myserver.org --port 25 --tls --user me@myserver.org --password mypass --to-addr me@myserver.org
+
+# Verify SMTP setup
+uv run tidal-cli notify test
+
+# Send baseline all-playlists email
+uv run tidal-cli notify send --all
+```
+
+### 7. Setup Linux Server Cron Job
 Get the exact crontab line for your server:
 ```bash
 uv run tidal-cli job cron-help

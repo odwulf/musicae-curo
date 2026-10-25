@@ -98,7 +98,9 @@ class JobRunner:
                     }
                 elif action_type == "snapshot_all_playlists":
                     res = snapshot_service.snapshot_all_playlists(
-                        alert_on_unavailable=params.get("alert_on_unavailable", True)
+                        alert_on_unavailable=params.get("alert_on_unavailable", True),
+                        notify=params.get("notify", True),
+                        force_all_mail=params.get("force_all_mail", False),
                     )
                 elif action_type == "snapshot_playlist":
                     res = snapshot_service.snapshot_playlist(
