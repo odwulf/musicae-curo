@@ -178,6 +178,7 @@ Musicae Curo manages its configuration and state in a secure dedicated directory
 | `~/.config/curo/tidal_session.json` | OAuth token cache for Tidal adapter | `0600` (`rw-------`) |
 | `~/.config/curo/spotify_session.json` | OAuth token cache for Spotify adapter | `0600` (`rw-------`) |
 | `~/.config/curo/deezer_session.json` | OAuth/Access token cache for Deezer adapter | `0600` (`rw-------`) |
+| `~/.config/curo/megamix_history.json` | Rolling daily mix track history for fresh-only filtering | `0600` (`rw-------`) |
 | `~/.config/curo/snapshots/<slug>/` | Incremental versioned SHA-256 JSON backups | `0700` (`rwx------`) |
 | `~/.config/curo/track_registry.json` | Historical healthy track metadata registry | `0600` (`rw-------`) |
 | `~/.config/curo/availability_alerts.log` | Append-only log of delisted tracks | `0600` (`rw-------`) |
@@ -203,8 +204,12 @@ Tidal and other streaming providers dynamically generate daily mixes depending o
 3. **Fisher-Yates Shuffle**: Randomizes track order.
 4. **Chunked Addition**: Ingests tracks in batches of 50 to prevent request timeouts.
 5. **Modes**:
-   - `replace` (default): Clears the Megamix and injects fresh tracks.
-   - `append`: Appends new tracks without duplicates.
+   - `replace` (default): Clears all existing tracks from the Megamix and injects fresh tracks.
+   - `append`: Appends new tracks without wiping previous entries.
+6. **Rolling History & Fresh-Only Filtering (`--exclude-recent-days / -e`)**:
+   - When `exclude_recent_days > 0` (e.g. `7`), tracks observed in the preceding *N* days are automatically excluded.
+   - Only truly **fresh tracks** that haven't appeared in recent daily mixes are selected.
+   - Historical entries are securely recorded in `~/.config/curo/megamix_history.json` and pruned automatically after 60 days.
 
 ---
 
@@ -304,7 +309,7 @@ When first initialized, `curo` configures two standard jobs:
 ```yaml
 jobs:
   daily-discovery-megamix:
-    description: "Backup all daily mixes and build a randomized daily megamix"
+    description: "Backup all daily mixes and build a randomized daily megamix (wiped fresh daily)"
     actions:
       - action: backup_daily_discovery
         params:
@@ -317,7 +322,21 @@ jobs:
           include_daily_mixes: true
           shuffle: true
           mode: "replace"
+          exclude_recent_days: 0
           description: "All daily mix tunes in random order - updated on {date}"
+
+  daily-fresh-megamix:
+    description: "Build a daily megamix containing only fresh tracks not seen in the last 7 days"
+    actions:
+      - action: create_megamix
+        params:
+          target_playlist: "Daily Fresh Megamix"
+          include_discovery: true
+          include_daily_mixes: true
+          shuffle: true
+          mode: "replace"
+          exclude_recent_days: 7
+          description: "Fresh daily mix tunes not heard in the last 7 days - updated on {date}"
 
   daily-playlist-backup:
     description: "Daily versioned snapshot of all personal playlists with availability alerts"

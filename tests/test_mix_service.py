@@ -94,6 +94,8 @@ def test_megamix_deduplication_and_shuffle(mock_session, mock_provider):
     target_pl.id = "megamix-pl"
     target_pl.name = "Daily Megamix"
 
+    mock_provider.clear_playlist = MagicMock(return_value=True)
+
     svc = MixService(mock_provider)
     svc.playlist_service.get_or_create_playlist = MagicMock(return_value=target_pl)
     svc.playlist_service.add_tracks = MagicMock(return_value=4)
@@ -107,10 +109,90 @@ def test_megamix_deduplication_and_shuffle(mock_session, mock_provider):
     assert res["success"] is True
     assert res["total_unique_tracks"] == 4
     assert res["mixes_processed"] == 3
+    mock_provider.clear_playlist.assert_called_once_with("megamix-pl")
 
     svc.playlist_service.add_tracks.assert_called_once()
     added_ids = svc.playlist_service.add_tracks.call_args[1]["track_ids"]
     assert set(added_ids) == {"101", "102", "103", "104"}
+
+
+def test_megamix_append_mode_does_not_clear(mock_session, mock_provider):
+    """Ensure append mode does not clear existing tracks."""
+    t1 = make_mock_track(101, "Song A")
+    disc = MagicMock(id="m-disc", title="My Daily Discovery", mix_type="discovery")
+    mock_session.mixes.return_value = [disc]
+
+    m_disc_obj = MagicMock()
+    m_disc_obj.tracks.return_value = [t1]
+    mock_session.mix.return_value = m_disc_obj
+
+    target_pl = MagicMock(id="megamix-pl")
+    mock_provider.clear_playlist = MagicMock(return_value=True)
+
+    svc = MixService(mock_provider)
+    svc.playlist_service.get_or_create_playlist = MagicMock(return_value=target_pl)
+    svc.playlist_service.add_tracks = MagicMock(return_value=1)
+
+    res = svc.create_megamix(mode="append")
+    assert res["success"] is True
+    mock_provider.clear_playlist.assert_not_called()
+
+
+def test_megamix_exclude_recent_days_fresh_only(tmp_path, mock_session, mock_provider):
+    """Ensure exclude_recent_days filters out tracks heard in recent days."""
+    from curo.config import ConfigManager
+    import json
+
+    cfg = ConfigManager(custom_config_dir=tmp_path)
+    svc = MixService(mock_provider, cfg=cfg)
+
+    # Pre-populate history: yesterday saw track 101 and ISRC2
+    yesterday = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    history = {
+        mock_provider.name: {
+            yesterday: {
+                "track_ids": ["101"],
+                "isrcs": ["ISRC2"],
+            }
+        }
+    }
+    with open(svc.history_file, "w", encoding="utf-8") as f:
+        json.dump(history, f)
+
+    # Today's mixes offer:
+    # 101 (seen yesterday by ID) -> EXCLUDE
+    # 102 with ISRC2 (seen yesterday by ISRC) -> EXCLUDE
+    # 103 with ISRC3 (never seen) -> KEEP (FRESH)
+    t1 = make_mock_track(101, "Old Song 1", isrc="ISRC1")
+    t2 = make_mock_track(102, "Old Song 2", isrc="ISRC2")
+    t3 = make_mock_track(103, "Fresh Song 3", isrc="ISRC3")
+
+    disc = MagicMock(id="m-disc", title="My Daily Discovery", mix_type="discovery")
+    mock_session.mixes.return_value = [disc]
+
+    m_disc_obj = MagicMock()
+    m_disc_obj.tracks.return_value = [t1, t2, t3]
+    mock_session.mix.return_value = m_disc_obj
+
+    target_pl = MagicMock(id="fresh-pl")
+    mock_provider.clear_playlist = MagicMock(return_value=True)
+    svc.playlist_service.get_or_create_playlist = MagicMock(return_value=target_pl)
+    svc.playlist_service.add_tracks = MagicMock(return_value=1)
+
+    res = svc.create_megamix(
+        target_playlist="Daily Fresh Megamix",
+        mode="replace",
+        exclude_recent_days=7,
+    )
+
+    assert res["success"] is True
+    assert res["total_unique_tracks"] == 1
+    assert res["excluded_recent_repeats"] == 2
+    mock_provider.clear_playlist.assert_called_once_with("fresh-pl")
+
+    svc.playlist_service.add_tracks.assert_called_once()
+    added_ids = svc.playlist_service.add_tracks.call_args[1]["track_ids"]
+    assert added_ids == ["103"]
 
 
 def test_backup_daily_discovery(mock_session, mock_provider):
