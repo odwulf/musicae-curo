@@ -78,9 +78,12 @@ class JobRunner:
 
         action_results: List[Dict[str, Any]] = []
 
+        job_folder = job_spec.get("folder")
+
         for idx, act in enumerate(actions, start=1):
             action_type = act.get("action")
             params = act.get("params", {}) or {}
+            folder = params.get("folder") or job_folder
 
             logger.info(f"Running action {idx}/{len(actions)}: {action_type} with params={params}")
 
@@ -89,6 +92,7 @@ class JobRunner:
                     res = mix_service.backup_daily_discovery(
                         playlist_name_format=params.get("playlist_name_format", "Discovery Backup - {date}"),
                         description=params.get("description", f"Automated daily backup of {self.provider.display_name} Daily Discovery"),
+                        folder=folder,
                     )
                 elif action_type == "create_megamix":
                     res = mix_service.create_megamix(
@@ -100,6 +104,7 @@ class JobRunner:
                         description=params.get("description", "All daily mix tunes in random order - updated on {date}"),
                         limit=params.get("limit"),
                         exclude_recent_days=params.get("exclude_recent_days", 0),
+                        folder=folder,
                     )
                 elif action_type == "export_playlist":
                     res = {
@@ -128,6 +133,7 @@ class JobRunner:
                         target_playlist=params.get("target_playlist", "Favorites Backup"),
                         mode=params.get("mode", "replace"),
                         description=params.get("description", "Automated backup of favorite/liked tracks"),
+                        folder=folder,
                     )
                 elif action_type == "sync_playlist":
                     from curo.services.playlist_sync_service import PlaylistSyncService
@@ -154,6 +160,7 @@ class JobRunner:
                         threshold=params.get("threshold", 0.8),
                         dry_run=params.get("dry_run", False),
                         create_if_missing=params.get("create_if_missing", True),
+                        folder=folder,
                     )
                 else:
                     raise JobExecutionError(f"Unknown action type: {action_type}")

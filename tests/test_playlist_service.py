@@ -130,3 +130,69 @@ def test_export_playlist_json_and_m3u(mock_session, mock_provider):
     assert "#EXTM3U" in m3u_out
     assert "Midnight Chill" in m3u_out
     assert "track://101" in m3u_out
+
+
+def test_get_folders_and_create_in_folder(mock_session, mock_provider):
+    # Setup mock request response for folders
+    mock_resp = MagicMock()
+    mock_resp.json.return_value = {
+        "items": [
+            {
+                "name": "Backups",
+                "data": {"id": "f-123", "name": "Backups", "totalNumberOfItems": 5},
+            }
+        ],
+        "totalNumberOfItems": 1,
+    }
+    mock_session.request.request.return_value = mock_resp
+
+    # Make session.user not a mock so TidalProvider queries request
+    class RealUser:
+        def __init__(self):
+            self.id = "u-1"
+        def create_playlist(self, title, description, parent_id="root"):
+            pl = MagicMock()
+            pl.id = "pl-new"
+            pl.name = title
+            pl.parent_id = parent_id
+            return pl
+        def create_folder(self, title):
+            f = MagicMock()
+            f.id = f"f-{title}"
+            f.name = title
+            return f
+
+    real_user = RealUser()
+    mock_session.user = real_user
+
+    svc = PlaylistService(mock_provider)
+
+    # 1. Test get_folders
+    folders = svc.get_folders()
+    assert len(folders) == 1
+    assert folders[0]["id"] == "f-123"
+    assert folders[0]["name"] == "Backups"
+
+    # 2. Test create_playlist in existing folder
+    pl = svc.create_playlist(title="My Backup PL", description="Desc", folder="Backups")
+    assert pl.id == "pl-new"
+
+    # 3. Test create_playlist in new folder that needs creation
+    pl2 = svc.create_playlist(title="Another PL", description="Desc", folder="New Folder")
+    assert pl2.id == "pl-new"
+
+
+def test_get_or_create_playlist_moves_existing_to_folder(mock_session, mock_provider):
+    existing_pl = MagicMock(id="pl-exist")
+    existing_pl.name = "Existing Playlist"
+    mock_session.playlist.return_value = existing_pl
+
+    mock_folder = MagicMock()
+    mock_session.folder.return_value = mock_folder
+
+    mock_provider.get_folders = MagicMock(return_value=[{"id": "f-bk", "name": "Backups"}])
+
+    svc = PlaylistService(mock_provider)
+    res = svc.get_or_create_playlist(title="Existing Playlist", folder="Backups")
+    assert res.id == "pl-exist"
+    mock_folder.add_items.assert_called_once_with(["pl-exist"])

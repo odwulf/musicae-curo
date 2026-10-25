@@ -61,7 +61,7 @@ class ProviderStub(MusicProvider):
         return []
 
     def create_playlist(
-        self, title: str, description: str = "", is_public: bool = False
+        self, title: str, description: str = "", is_public: bool = False, folder: Optional[str] = None
     ) -> Playlist:
         self._not_implemented("create_playlist")
         raise NotImplementedError

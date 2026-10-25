@@ -58,21 +58,34 @@ class PlaylistService:
         title: str,
         description: str = "",
         public: bool = False,
+        folder: Optional[str] = None,
     ) -> Any:
         """Create a new playlist."""
-        return self.provider.create_playlist(title=title, description=description, is_public=public)
+        return self.provider.create_playlist(title=title, description=description, is_public=public, folder=folder)
 
     def get_or_create_playlist(
         self,
         title: str,
         description: str = "",
         public: bool = False,
+        folder: Optional[str] = None,
     ) -> Any:
         """Find an existing user playlist with matching name or create a new one."""
         existing = self.get_playlist(title)
         if existing:
+            if folder:
+                pl_id = getattr(existing, "id", None) or title
+                self.move_playlist_to_folder(str(pl_id), folder)
             return existing
-        return self.create_playlist(title=title, description=description, public=public)
+        return self.create_playlist(title=title, description=description, public=public, folder=folder)
+
+    def move_playlist_to_folder(self, playlist_id: str, folder: str) -> bool:
+        """Move a playlist into a folder."""
+        return self.provider.move_playlist_to_folder(playlist_id, folder)
+
+    def get_folders(self) -> List[Dict[str, Any]]:
+        """Fetch all playlist folders owned by the authenticated user."""
+        return self.provider.get_folders()
 
     def add_tracks(
         self,
@@ -146,6 +159,7 @@ class PlaylistService:
         target_playlist: str = "Favorites Backup",
         mode: str = "replace",
         description: str = "Automated backup of favorite/liked tracks",
+        folder: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Fetch all favorite tracks from provider and mirror them into a user playlist."""
         favorites = self.provider.get_favorite_tracks()
@@ -153,6 +167,7 @@ class PlaylistService:
             title=target_playlist,
             description=description,
             public=False,
+            folder=folder,
         )
         pl_id = getattr(playlist, "id", target_playlist)
 
@@ -168,7 +183,7 @@ class PlaylistService:
 
         added = self.add_tracks(playlist=playlist, track_ids=tracks_to_add)
 
-        return {
+        res: Dict[str, Any] = {
             "success": True,
             "provider": self.provider.name,
             "target_playlist": target_playlist,
@@ -178,6 +193,9 @@ class PlaylistService:
             "tracks_added_count": len(tracks_to_add),
             "tracks_added": added,
         }
+        if folder:
+            res["folder"] = folder
+        return res
 
     def export_favorites(self, export_format: str = "json") -> str:
         """Export favorite tracks in json, m3u8, or csv format."""

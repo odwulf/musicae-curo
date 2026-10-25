@@ -338,6 +338,7 @@ class PlaylistSyncService:
         dry_run: bool = True,
         create_if_missing: bool = True,
         export_path: Optional[Path] = None,
+        folder: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Synchronize playlist tracks from source provider to target provider."""
         source_pl = self.source_provider.get_playlist(source_identifier)
@@ -359,6 +360,7 @@ class PlaylistSyncService:
                     target_pl = self.target_provider.create_playlist(
                         title=tgt_name,
                         description=f"Synchronized from {self.source_provider.display_name} via Musicae Curo",
+                        folder=folder,
                     )
                     target_created = True
                 else:
@@ -374,6 +376,9 @@ class PlaylistSyncService:
                     f"Target playlist '{tgt_name}' not found on {self.target_provider.display_name}. "
                     f"Set create_if_missing=True to create automatically."
                 )
+        elif folder and not dry_run:
+            tgt_id = getattr(target_pl, "id", None) or tgt_name
+            self.target_provider.move_playlist_to_folder(str(tgt_id), folder)
 
         target_tracks = (
             self.target_provider.get_playlist_tracks(str(target_pl.id))

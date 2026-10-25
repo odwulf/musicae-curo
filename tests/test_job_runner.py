@@ -120,6 +120,7 @@ def test_run_fresh_megamix_job(tmp_path: Path):
             description="Fresh daily mix tunes not heard in the last 7 days - updated on {date}",
             limit=None,
             exclude_recent_days=7,
+            folder=None,
         )
 
 
@@ -138,4 +139,42 @@ def test_run_job_action_failure_raises_error(tmp_path: Path):
 
         with pytest.raises(JobExecutionError, match="All candidate tracks were excluded"):
             runner.run_job("daily-fresh-megamix")
+
+
+def test_job_runner_passes_job_level_and_action_level_folder(tmp_path: Path):
+    """Verify folder setting at job level and action params level is passed correctly."""
+    cfg = ConfigManager(custom_config_dir=tmp_path)
+    custom_yaml = """
+jobs:
+  folder-job:
+    folder: "Default Backup Folder"
+    actions:
+      - action: backup_daily_discovery
+        params:
+          playlist_name_format: "Discovery - {date}"
+      - action: create_megamix
+        params:
+          target_playlist: "Custom Megamix"
+          folder: "Explicit Megamix Folder"
+"""
+    cfg.jobs_file.write_text(custom_yaml, encoding="utf-8")
+    mock_provider = MagicMock(spec=MusicProvider)
+    runner = JobRunner(provider=mock_provider, cfg=cfg)
+
+    with patch("curo.services.job_runner.MixService") as MockMixService:
+        mix_inst = MockMixService.return_value
+        mix_inst.backup_daily_discovery.return_value = {"success": True, "tracks_added": 10}
+        mix_inst.create_megamix.return_value = {"success": True, "total_unique_tracks": 50}
+
+        res = runner.run_job("folder-job")
+        assert res["success"] is True
+        assert res["actions_executed"] == 2
+
+        # Action 1 should inherit job-level folder
+        call1 = mix_inst.backup_daily_discovery.call_args[1]
+        assert call1["folder"] == "Default Backup Folder"
+
+        # Action 2 should use its own overriding action folder
+        call2 = mix_inst.create_megamix.call_args[1]
+        assert call2["folder"] == "Explicit Megamix Folder"
 

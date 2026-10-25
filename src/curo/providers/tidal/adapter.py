@@ -195,7 +195,101 @@ class TidalProvider(MusicProvider):
             raise
         return all_tracks
 
-    # --- Playlists ---
+    # --- Playlists & Folders ---
+    def get_folders(self) -> List[Dict[str, Any]]:
+        """Fetch all playlist folders owned by the authenticated user."""
+        if not self.session or not self.session.user or _is_mock(self.session.user):
+            return []
+        folders: List[Dict[str, Any]] = []
+        seen_ids: Set[str] = set()
+        offset = 0
+        limit = 50
+        while True:
+            try:
+                params = {
+                    "folderId": "root",
+                    "offset": offset,
+                    "limit": limit,
+                    "order": "NAME",
+                    "includeOnly": "FOLDER",
+                }
+                res = self.session.request.request(
+                    "GET",
+                    "my-collection/playlists/folders",
+                    base_url=self.session.config.api_v2_location,
+                    params=params,
+                )
+                if not hasattr(res, "json"):
+                    break
+                data = res.json()
+                if not isinstance(data, dict):
+                    break
+                items = data.get("items", [])
+                if not isinstance(items, list) or not items:
+                    break
+                new_items_found = False
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    f_data = it.get("data", {}) if isinstance(it.get("data"), dict) else {}
+                    f_id = f_data.get("id")
+                    if f_id and f_id not in seen_ids:
+                        seen_ids.add(f_id)
+                        new_items_found = True
+                        folders.append({
+                            "id": f_id,
+                            "name": it.get("name") or f_data.get("name"),
+                            "total_items": f_data.get("totalNumberOfItems", 0),
+                        })
+                if not new_items_found or len(items) < limit:
+                    break
+                offset += len(items)
+            except Exception as e:
+                logger.debug(f"Error fetching TIDAL folders: {e}")
+                break
+        return folders
+
+    def _get_or_create_folder(self, folder_name_or_id: str) -> str:
+        target = folder_name_or_id.strip()
+        existing_folders = self.get_folders()
+        for f in existing_folders:
+            f_id = str(f.get("id", ""))
+            f_name = str(f.get("name", ""))
+            if f_id == target or f_name.lower() == target.lower():
+                return f_id
+
+        if not self.session or not self.session.user:
+            raise RuntimeError("No user session active to create playlist folder.")
+
+        try:
+            created = self.session.user.create_folder(target)
+            return str(getattr(created, "id", created))
+        except Exception as e:
+            logger.warning(f"Failed to create folder '{target}' on Tidal: {e}")
+            raise
+
+    def create_folder(self, name: str) -> Optional[str]:
+        try:
+            return self._get_or_create_folder(name)
+        except Exception as e:
+            logger.warning(f"Failed to create folder '{name}': {e}")
+            return None
+
+    def move_playlist_to_folder(self, playlist_id: str, folder: str) -> bool:
+        if not self.session or not self.session.user:
+            return False
+        try:
+            folder_id = self._get_or_create_folder(folder)
+            if hasattr(self.session, "folder"):
+                folder_obj = self.session.folder(folder_id)
+                if hasattr(folder_obj, "add_items"):
+                    folder_obj.add_items([playlist_id])
+                    return True
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to move playlist '{playlist_id}' to folder '{folder}': {e}")
+            return False
+
     def get_user_playlists(self) -> List[Playlist]:
         if not self.session.user:
             return []
@@ -241,14 +335,21 @@ class TidalProvider(MusicProvider):
         return [self.to_domain_track(t) for t in raw_tracks]
 
     def create_playlist(
-        self, title: str, description: str = "", is_public: bool = False
+        self, title: str, description: str = "", is_public: bool = False, folder: Optional[str] = None
     ) -> Playlist:
         if not self.session.user:
             raise RuntimeError("No user session active to create playlist.")
-        raw_pl = self.session.user.create_playlist(
-            title=title,
-            description=description,
-        )
+        kwargs: Dict[str, Any] = {
+            "title": title,
+            "description": description,
+        }
+        if folder:
+            try:
+                parent_id = self._get_or_create_folder(folder)
+                kwargs["parent_id"] = parent_id
+            except Exception as e:
+                logger.warning(f"Could not resolve folder '{folder}', creating playlist at root: {e}")
+        raw_pl = self.session.user.create_playlist(**kwargs)
         return self.to_domain_playlist(raw_pl)
 
     def add_tracks_to_playlist(

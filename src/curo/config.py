@@ -13,6 +13,9 @@ from pydantic import BaseModel, Field
 DEFAULT_JOBS_YAML = """# Musicae Curo (curo) automated job definitions
 # Schedulable via cron: e.g. run daily at 06:00 UTC:
 # 0 6 * * * /path/to/curo job run daily-discovery-megamix --quiet
+#
+# Note: You can specify a destination playlist 'folder' (e.g. 'Discovery Backups')
+# either at the job level (default for actions in the job) or per action under 'params:'.
 
 jobs:
   daily-discovery-megamix:
@@ -22,6 +25,7 @@ jobs:
         params:
           playlist_name_format: "Discovery Backup - {date}"
           description: "Automated daily backup of Daily Discovery"
+          folder: "Discovery Backups"
       - action: create_megamix
         params:
           target_playlist: "Daily Megamix"
