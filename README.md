@@ -64,6 +64,9 @@ uv run tidal-cli playlist repair "My Playlist"
 
 # Live replacement on Tidal
 uv run tidal-cli playlist repair "My Playlist" --live
+
+# Replace a specific track manually by ID, index, ISRC, or album UPC
+uv run tidal-cli playlist replace "My Playlist" --track "#4" --with GBCEE0700017 --live
 ```
 
 ### 6. Email Notifications (Daily Change Digest & Baseline)

@@ -282,6 +282,18 @@ def playlist_repair(
     all_tracks: bool = typer.Option(
         False, "--all-tracks", help="Inspect all tracks in playlist, not just unavailable ones."
     ),
+    track: Optional[str] = typer.Option(
+        None, "--track", help="Target specific track ID or playlist position to repair (e.g. 1439552 or #5)"
+    ),
+    replacement: Optional[str] = typer.Option(
+        None, "--with", "--replacement", help="Specific replacement Track ID, ISRC, or UPC barcode"
+    ),
+    isrc: Optional[str] = typer.Option(
+        None, "--isrc", help="Replacement ISRC sound recording code (e.g. GBCEE0700017)"
+    ),
+    upc: Optional[str] = typer.Option(
+        None, "--upc", help="Replacement album UPC barcode (e.g. 07464381122)"
+    ),
 ) -> None:
     """Detect unavailable tracks in playlist and evaluate replacement candidates."""
     mgr = SessionManager(state["config"])
@@ -295,6 +307,10 @@ def playlist_repair(
             dry_run=dry_run,
             all_tracks=all_tracks,
             export_path=export,
+            target_track=track,
+            replacement=replacement,
+            isrc=isrc,
+            upc=upc,
         )
     except Exception as e:
         err_console.print(f"[bold red]Repair analysis failed:[/bold red] {e}")
@@ -368,6 +384,82 @@ def playlist_repair(
     if dry_run and threshold >= 1.0:
         console.print(
             "[dim]Note: Baseline threshold is set to 100% and Dry-Run is active. No tracks were replaced.[/dim]"
+        )
+
+
+@playlist_app.command("replace")
+def playlist_replace(
+    identifier: str = typer.Argument(..., help="Playlist ID or Name"),
+    track: str = typer.Option(..., "--track", "-t", help="Track ID or position in playlist (e.g. 1439552 or #5)"),
+    replacement: Optional[str] = typer.Option(
+        None, "--with", "-r", "--replacement", help="Replacement Track ID, ISRC, or UPC barcode"
+    ),
+    isrc: Optional[str] = typer.Option(None, "--isrc", help="Replacement ISRC sound recording code"),
+    upc: Optional[str] = typer.Option(None, "--upc", help="Replacement album UPC barcode"),
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--live", help="Simulate replacement without modifying playlist on Tidal."
+    ),
+) -> None:
+    """Replace a specific playlist track by providing replacement track ID, ISRC, or UPC."""
+    if not replacement and not isrc and not upc:
+        err_console.print(
+            "[bold red]Error:[/bold red] You must provide at least one replacement identifier (--with, --isrc, or --upc)."
+        )
+        raise typer.Exit(code=1)
+
+    mgr = SessionManager(state["config"])
+    try:
+        session = mgr.load_session()
+        from tidal_cli.services.playlist_repair_service import PlaylistRepairService
+
+        repair_svc = PlaylistRepairService(session)
+        res = repair_svc.replace_track(
+            playlist_identifier=identifier,
+            target=track,
+            replacement=replacement,
+            isrc=isrc,
+            upc=upc,
+            dry_run=dry_run,
+        )
+    except Exception as e:
+        err_console.print(f"[bold red]Replacement failed:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    if state["json_mode"]:
+        console.print_json(data=res)
+        return
+
+    orig = res["original_track"]
+    cand = res["replacement_track"]
+    mode_str = "[yellow]Dry-Run (Simulation)[/yellow]" if dry_run else "[red]LIVE (Mutating)[/red]"
+
+    table = Table(
+        title=f"Playlist Track Replacement: {res['playlist_name']} ({mode_str})",
+        border_style="cyan",
+    )
+    table.add_column("Property", style="bold")
+    table.add_column("Original Track", style="dim")
+    table.add_column("Replacement Track", style="bold green")
+
+    table.add_row("Position in Playlist", f"#{res['position']}", f"#{res['position']}")
+    table.add_row("Title", orig["title"], cand["title"])
+    table.add_row("Artist", orig["artist"], cand["artist"])
+    table.add_row("Album", orig["album"], cand["album"])
+    table.add_row("Track ID", str(orig["id"]), str(cand["id"]))
+    table.add_row("ISRC", orig.get("isrc") or "[dim]None[/dim]", cand.get("isrc") or "[dim]None[/dim]")
+    table.add_row("Album UPC", orig.get("album_upc") or "[dim]None[/dim]", cand.get("album_upc") or "[dim]None[/dim]")
+    table.add_row("Resolution Method", "-", res["resolution_method"])
+    table.add_row("Similarity Score", "-", f"{res['similarity_score']*100:.0f}%")
+    table.add_row("Status", "-", f"[bold]{res['status']}[/bold]")
+
+    console.print(table)
+    if dry_run:
+        console.print(
+            "\n[dim]Note: This was a simulation. To apply this replacement live on Tidal, pass [bold]--live[/bold].[/dim]"
+        )
+    elif res["status"] == "replaced":
+        console.print(
+            f"\n[green]✓ Successfully replaced track #{res['position']} '{orig['title']}' with candidate ID {cand['id']} on Tidal![/green]"
         )
 
 

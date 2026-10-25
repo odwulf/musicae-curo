@@ -157,8 +157,8 @@ def evaluate_candidate(
     # -----------------------------------------------------------------------
 
     # 1. Title similarity (up to 30 points)
-    orig_title = getattr(original, "name", "") or ""
-    cand_title = getattr(candidate, "name", "") or ""
+    orig_title = _clean_str(getattr(original, "name", "")) or ""
+    cand_title = _clean_str(getattr(candidate, "name", "")) or ""
     title_sim = compute_string_similarity(orig_title, cand_title)
     points += title_sim * 30.0
 
@@ -248,8 +248,8 @@ def evaluate_candidate(
         reasoning_parts.append(f"Duration differs significantly (diff: {duration_delta}s, +0 pts).")
 
     # 4. Album name match (up to 10 points)
-    orig_alb_name = getattr(getattr(original, "album", None), "name", "") or ""
-    cand_alb_name = getattr(getattr(candidate, "album", None), "name", "") or ""
+    orig_alb_name = _clean_str(getattr(getattr(original, "album", None), "name", "")) or ""
+    cand_alb_name = _clean_str(getattr(getattr(candidate, "album", None), "name", "")) or ""
     clean_orig_alb = normalize_title(orig_alb_name)
     clean_cand_alb = normalize_title(cand_alb_name)
     alb_sim = max(

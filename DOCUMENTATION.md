@@ -214,6 +214,17 @@ tidal-cli playlist repair "My Heavy Rotation"
 # Apply replacements live on Tidal (threshold defaults to 80%)
 tidal-cli playlist repair "My Heavy Rotation" --live
 
+# Target a specific track in repair analysis or provide manual replacement override
+tidal-cli playlist repair "My Heavy Rotation" --track 1439552 --with 29505086 --live
+
+# Replace a track directly by track ID or playlist position (#index)
+# Dry-run simulation (verifies metadata similarity, duration, and score)
+tidal-cli playlist replace "My Heavy Rotation" --track 1439552 --with 29505086
+
+# Live manual replacement using track ID, ISRC, or album UPC
+tidal-cli playlist replace "My Heavy Rotation" --track "#4" --with GBCEE0700017 --live
+tidal-cli playlist replace "My Heavy Rotation" --track "#4" --upc 0077774620258 --live
+
 # Run repair analysis and export report to a custom JSON location
 tidal-cli playlist repair "My Heavy Rotation" --export reports/custom_repair.json
 

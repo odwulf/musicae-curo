@@ -7,14 +7,21 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import tidalapi
+from tidalapi.media import Track
 from tidalapi.playlist import UserPlaylist
 
 from tidal_cli.config import ConfigManager, config_manager
 from tidal_cli.services.candidate_finder import CandidateFinder
 from tidal_cli.services.playlist_service import PlaylistService
+from tidal_cli.services.similarity_scorer import (
+    CandidateEvaluation,
+    _clean_str,
+    _is_mock,
+    evaluate_candidate,
+)
 from tidal_cli.services.track_matcher import is_track_available
 
 logger = logging.getLogger(__name__)
@@ -50,6 +57,10 @@ class PlaylistRepairService:
         dry_run: bool = True,
         all_tracks: bool = False,
         export_path: Optional[Path] = None,
+        target_track: Optional[Union[str, int]] = None,
+        replacement: Optional[Union[str, int]] = None,
+        isrc: Optional[str] = None,
+        upc: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Scan playlist for unavailable tracks, score candidates, and optionally apply replacements."""
         playlist = self.playlist_service.get_playlist(identifier)
@@ -65,8 +76,20 @@ class PlaylistRepairService:
         for idx, t in enumerate(tracks):
             available = is_track_available(t)
 
-            # If track is available and we're not checking all tracks, skip
-            if available and not all_tracks:
+            # If user targeted a specific track ID or index, filter for it
+            if target_track is not None:
+                t_str = str(target_track).strip()
+                clean_target = t_str.lstrip("#")
+                is_match = False
+                if str(getattr(t, "id", "")) == t_str:
+                    is_match = True
+                elif clean_target.isdigit():
+                    val = int(clean_target)
+                    if val == idx + 1 or val == idx:
+                        is_match = True
+                if not is_match:
+                    continue
+            elif available and not all_tracks:
                 continue
 
             orig_artist = getattr(getattr(t, "artist", None), "name", "Unknown Artist")
@@ -96,7 +119,20 @@ class PlaylistRepairService:
                 orig_release_date = hist.get("album_release_date")
 
             # Find candidates
-            candidates = self.candidate_finder.find_candidates(t, max_candidates=10)
+            if (replacement or isrc or upc) and target_track is not None:
+                try:
+                    cand_track, method, eval_result = self.resolve_replacement_track(
+                        original_track=t,
+                        replacement=replacement,
+                        isrc=isrc,
+                        upc=upc,
+                    )
+                    candidates = [eval_result]
+                except Exception as e:
+                    logger.error(f"Failed to resolve candidate for track #{idx} '{t.name}': {e}")
+                    candidates = []
+            else:
+                candidates = self.candidate_finder.find_candidates(t, max_candidates=10)
 
             # Mark candidates against threshold
             cand_dicts = []
@@ -202,4 +238,204 @@ class PlaylistRepairService:
 
         report["exported_to"] = str(out_file)
         return report
+
+    def resolve_replacement_track(
+        self,
+        original_track: Track,
+        replacement: Optional[Union[str, int]] = None,
+        isrc: Optional[str] = None,
+        upc: Optional[str] = None,
+    ) -> tuple[Track, str, CandidateEvaluation]:
+        """Resolve a candidate replacement Track object from a track ID, ISRC, or UPC."""
+        # 1. Check if explicit ISRC is provided or if replacement matches ISRC format
+        isrc_to_search = isrc.strip() if isrc else None
+        if not isrc_to_search and replacement:
+            rep_clean = str(replacement).strip()
+            if re.match(r"^[A-Za-z]{2}[A-Za-z0-9]{3}\d{7}$", rep_clean):
+                isrc_to_search = rep_clean.upper()
+
+        if isrc_to_search:
+            method = f"isrc ({isrc_to_search})"
+            try:
+                tracks = self.session.get_tracks_by_isrc(isrc_to_search)
+                available = [t for t in (tracks or []) if is_track_available(t)]
+                evals = [
+                    evaluate_candidate(original_track, t, original_isrc=isrc_to_search)
+                    for t in (available or tracks or [])
+                ]
+                if evals:
+                    evals.sort(key=lambda c: (-c.score, c.disqualified))
+                    return evals[0].candidate, method, evals[0]
+            except Exception as e:
+                logger.warning(f"Error querying tracks by ISRC '{isrc_to_search}': {e}")
+
+        # 2. Check if explicit UPC is provided or if replacement matches barcode format
+        upc_to_search = upc.strip() if upc else None
+        if not upc_to_search and replacement and not isrc_to_search:
+            rep_clean = str(replacement).strip()
+            if rep_clean.isdigit() and len(rep_clean) in (12, 13):
+                upc_to_search = rep_clean
+
+        if upc_to_search:
+            method = f"upc ({upc_to_search})"
+            try:
+                albums = self.session.get_albums_by_barcode(upc_to_search)
+                evals = []
+                for alb in albums or []:
+                    alb_upc = getattr(alb, "upc", upc_to_search)
+                    for t in alb.tracks():
+                        if is_track_available(t):
+                            evals.append(
+                                evaluate_candidate(
+                                    original_track,
+                                    t,
+                                    original_upc=upc_to_search,
+                                    candidate_upc=alb_upc,
+                                )
+                            )
+                if evals:
+                    evals.sort(key=lambda c: (-c.score, c.disqualified))
+                    return evals[0].candidate, method, evals[0]
+            except Exception as e:
+                logger.warning(f"Error querying album by barcode '{upc_to_search}': {e}")
+
+        # 3. Direct Track ID
+        track_id_to_fetch = None
+        if replacement and not isrc_to_search and not upc_to_search:
+            rep_clean = str(replacement).strip()
+            if rep_clean.isdigit():
+                track_id_to_fetch = int(rep_clean)
+
+        if track_id_to_fetch is not None:
+            method = f"track_id ({track_id_to_fetch})"
+            try:
+                cand_track = self.session.track(track_id_to_fetch)
+                if cand_track:
+                    eval_res = evaluate_candidate(original_track, cand_track)
+                    return cand_track, method, eval_res
+            except Exception as e:
+                raise ValueError(f"Failed to fetch replacement track ID {track_id_to_fetch}: {e}")
+
+        raise ValueError(
+            f"Could not find or resolve any replacement track for "
+            f"replacement='{replacement}', isrc='{isrc}', upc='{upc}'"
+        )
+
+    def replace_track(
+        self,
+        playlist_identifier: str,
+        target: Union[str, int],
+        replacement: Optional[Union[str, int]] = None,
+        isrc: Optional[str] = None,
+        upc: Optional[str] = None,
+        dry_run: bool = True,
+    ) -> Dict[str, Any]:
+        """Replace a specific track in a playlist by track ID, playlist position, ISRC, or UPC."""
+        playlist = self.playlist_service.get_playlist(playlist_identifier)
+        if not playlist:
+            raise ValueError(f"Playlist not found: {playlist_identifier}")
+
+        tracks = playlist.tracks()
+        target_str = str(target).strip()
+
+        target_idx = None
+        target_track = None
+
+        # Try matching by track ID first
+        for i, t in enumerate(tracks):
+            if str(getattr(t, "id", "")) == target_str:
+                target_idx = i
+                target_track = t
+                break
+
+        # If not found by track ID, check if target is an index (e.g. "4", "#5")
+        if target_idx is None:
+            clean_idx_str = target_str.lstrip("#")
+            if clean_idx_str.isdigit():
+                val = int(clean_idx_str)
+                if 1 <= val <= len(tracks):
+                    target_idx = val - 1
+                    target_track = tracks[target_idx]
+                elif val == 0 and len(tracks) > 0:
+                    target_idx = 0
+                    target_track = tracks[0]
+
+        if target_track is None or target_idx is None:
+            raise ValueError(
+                f"Track '{target}' not found in playlist '{playlist.name}' (contains {len(tracks)} tracks)."
+            )
+
+        cand_track, method, eval_result = self.resolve_replacement_track(
+            original_track=target_track,
+            replacement=replacement,
+            isrc=isrc,
+            upc=upc,
+        )
+
+        orig_artist = _clean_str(getattr(getattr(target_track, "artist", None), "name", None)) or "Unknown Artist"
+        orig_album = _clean_str(getattr(getattr(target_track, "album", None), "name", None)) or "Unknown Album"
+        orig_isrc = _clean_str(getattr(target_track, "isrc", None))
+        orig_upc = _clean_str(getattr(getattr(target_track, "album", None), "upc", None))
+        orig_dur = getattr(target_track, "duration", None)
+        if _is_mock(orig_dur):
+            orig_dur = None
+
+        cand_artist = _clean_str(getattr(getattr(cand_track, "artist", None), "name", None)) or "Unknown Artist"
+        cand_album = _clean_str(getattr(getattr(cand_track, "album", None), "name", None)) or "Unknown Album"
+        cand_isrc = _clean_str(getattr(cand_track, "isrc", None))
+        cand_upc = _clean_str(getattr(getattr(cand_track, "album", None), "upc", None))
+        cand_dur = getattr(cand_track, "duration", None)
+        if _is_mock(cand_dur):
+            cand_dur = None
+
+        res_dict = {
+            "playlist_id": str(playlist.id),
+            "playlist_name": str(playlist.name),
+            "index_in_playlist": target_idx,
+            "position": target_idx + 1,
+            "resolution_method": method,
+            "dry_run": dry_run,
+            "original_track": {
+                "id": target_track.id if not _is_mock(target_track.id) else None,
+                "title": _clean_str(getattr(target_track, "name", None)) or "",
+                "artist": orig_artist,
+                "album": orig_album,
+                "duration_seconds": orig_dur,
+                "isrc": orig_isrc,
+                "album_upc": orig_upc,
+                "available": is_track_available(target_track),
+            },
+            "replacement_track": {
+                "id": cand_track.id if not _is_mock(cand_track.id) else None,
+                "title": _clean_str(getattr(cand_track, "name", None)) or "",
+                "artist": cand_artist,
+                "album": cand_album,
+                "duration_seconds": cand_dur,
+                "isrc": cand_isrc,
+                "album_upc": cand_upc,
+                "available": is_track_available(cand_track),
+            },
+            "similarity_score": round(eval_result.score, 2),
+            "reasoning": eval_result.reasoning,
+            "status": "simulated" if dry_run else "pending",
+        }
+
+        if not dry_run and isinstance(playlist, UserPlaylist):
+            try:
+                new_id = str(cand_track.id)
+                added = playlist.add([new_id], position=target_idx, allow_duplicates=True)
+                if not added:
+                    res_dict["status"] = "error: tidal_skipped_add"
+                else:
+                    removed = playlist.remove_by_index(target_idx + 1)
+                    if not removed:
+                        res_dict["status"] = "error: failed_to_remove_old_track"
+                    else:
+                        res_dict["status"] = "replaced"
+                        slug = _slugify(playlist.name)
+                        self.snapshot_service.update_track_registry([cand_track], slug)
+            except Exception as e:
+                res_dict["status"] = f"error: {e}"
+
+        return res_dict
 
