@@ -138,7 +138,7 @@ def provider_list() -> None:
 
     for p in providers:
         is_def = "* (default)" if p == default_p else ""
-        status = "Active" if p in ("tidal", "spotify") else "Scaffolded (stub)"
+        status = "Active" if p in ("tidal", "spotify", "deezer") else "Scaffolded (stub)"
         table.add_row(p, is_def, status)
 
     console.print(table)
@@ -159,7 +159,7 @@ def provider_default(
     else:
         current = state["config"].get_default_provider()
         if state["json_mode"]:
-            console.print(json.dumps({"default_provider": current}))
+            console.print_json(data={"default_provider": current})
         else:
             console.print(f"Current default provider: [bold cyan]{current}[/bold cyan]")
 
@@ -177,7 +177,7 @@ def auth_login(
         console.print(
             Panel(
                 f"[bold yellow]{p.display_name} adapter is scaffolded, but not yet implemented.[/bold yellow]\n\n"
-                f"[dim]Musicae Curo currently supports [bold]Tidal[/bold] and [bold]Spotify[/bold] as active providers.\n"
+                f"[dim]Musicae Curo currently supports [bold]Tidal[/bold], [bold]Spotify[/bold], and [bold]Deezer[/bold] as active providers.\n"
                 f"Support for {p.display_name} is planned. Contributions are welcome!\n"
                 f"Run [bold]curo provider list[/bold] to check provider statuses.[/dim]",
                 title=f"{p.display_name} Provider",

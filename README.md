@@ -17,8 +17,8 @@ Musicae Curo (*Latin: "I care for music"*) is a modular, provider-agnostic music
 - **Modular Multi-Provider Architecture**:
   - Unified Provider Service Provider Interface (`MusicProvider` SPI).
   - Dynamic adapter registry (`ProviderRegistry`) supporting runtime switching via `-p / --provider <name>`.
-  - **Tidal** and **Spotify**: Fully functional and active out of the box.
-  - **Deezer**, **Qobuz**, and **YouTube Music**: Scaffolded interface stubs ready for community contribution and future implementation.
+  - **Tidal**, **Spotify**, and **Deezer**: Fully functional and active out of the box.
+  - **Qobuz** and **YouTube Music**: Scaffolded interface stubs ready for community contribution and future implementation.
 - **Dynamic Mix Discovery**:
   - Automatically queries and discovers Daily Mixes, plus *Daily Discovery*.
 - **Automated Daily Megamix & Archiving**:
@@ -70,6 +70,9 @@ uv run curo auth login -p tidal
 
 # Log in with Spotify (OAuth2 authorization code flow)
 uv run curo auth login -p spotify
+
+# Log in with Deezer (Direct access token or OAuth2 flow)
+uv run curo auth login -p deezer
 
 # Check authentication status
 uv run curo auth status
