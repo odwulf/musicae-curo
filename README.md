@@ -16,6 +16,12 @@ A schedulable command-line interface for TIDAL, tailored for automated Linux `cr
   - Silent token refresh transparently prevents expired authentication during unattended runs.
 - **Declarative Job Engine**: Define recurring cron tasks in `jobs.yaml` with built-in `job cron-help` syntax generator.
 - **Playlist & Album Export with Full Metadata**: Export any playlist or album with comprehensive container and track metadata (ISRC, duration, audio quality, BPM, key, gain, artists, release dates) to formatted JSON, M3U8, or CSV.
+- **Playlist Repair & Candidate Evaluation (Unavailable Track Replacement)**:
+  - Scans playlists for retired/unavailable tracks (`allow_streaming: false`).
+  - Tiered candidate search via ISRC, Album UPC barcode, and fuzzy metadata.
+  - Explainable scoring ($0.0 - 1.0$) with detailed human-readable reasoning strings.
+  - Severe penalties for Live/Acoustic mismatches (requiring manual approval).
+  - Defaults to 100% threshold & dry-run, generating diagnostic reports in `reports/` (git-ignored).
 
 ## Installation
 

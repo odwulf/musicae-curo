@@ -39,3 +39,7 @@ credentials.json
 .idea/
 *.swp
 
+# Diagnostic reports and candidate evaluations
+reports/
+
+
