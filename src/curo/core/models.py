@@ -53,6 +53,7 @@ class Track(BaseModel):
     available: bool = True
     allow_streaming: bool = True
     stream_ready: bool = True
+    provider_replacement_id: Optional[str] = None
 
     # Helper property for compatibility with existing string normalization
     @property

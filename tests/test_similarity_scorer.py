@@ -171,3 +171,26 @@ def test_collaborating_artists_inverted_billing_matches_full_points():
     assert "Same album release" in ev.reasoning
 
 
+
+def test_official_provider_replacement_bonus_and_high_score():
+    orig = make_track(
+        name="Je veux prendre ta main",
+        artist_name="Frank Alamo",
+        duration=137,
+        album_name="Salut Les Copains",
+        artist_id=3545740,
+    )
+    cand = make_track(
+        name="Je veux prendre ta main",
+        artist_name="Frank Alamo",
+        duration=136,
+        album_name="Tendres Annees",
+        artist_id=3545740,
+    )
+    ev = evaluate_candidate(orig, cand, is_provider_replacement=True)
+    assert ev.score >= 0.95
+    assert ev.is_provider_replacement is True
+    assert "Official provider replacement" in ev.reasoning
+    d = ev.to_dict()
+    assert d["is_provider_replacement"] is True
+    assert d["breakdown"]["is_provider_replacement"] is True

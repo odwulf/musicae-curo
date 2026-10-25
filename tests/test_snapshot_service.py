@@ -353,3 +353,69 @@ def test_snapshot_playlist_integration_with_relinking(temp_config: ConfigManager
     assert diff["relinked_tracks"][0]["new_id"] == "502"
     assert len(diff["added_tracks"]) == 0
     assert len(diff["removed_tracks"]) == 0
+
+
+def test_snapshot_proactive_replacement_recording(temp_config: ConfigManager):
+    mock_provider = MagicMock()
+    mock_provider.name = "tidal"
+    mock_pl = MagicMock(id="pl-beatles")
+    mock_pl.name = "Beatles en francais"
+    mock_provider.get_playlist.return_value = mock_pl
+
+    t_healthy = MagicMock(id=26995301, isrc="FRZ016402450", duration=137, available=True, allow_streaming=True, stream_ready=True)
+    t_healthy.name = "Je veux prendre ta main"
+    t_healthy.artist.name = "Frank Alamo"
+    t_healthy.album.name = "Salut Les Copains"
+    t_healthy.album.upc = "00602537725496"
+    t_healthy.album.release_date = "2014-04-01"
+
+    mock_provider.get_playlist_tracks.return_value = [t_healthy]
+    # Proactively discovered replacement
+    mock_provider.get_playlist_track_replacements.return_value = {"26995301": "36142925"}
+
+    service = SnapshotService(provider=mock_provider, cfg=temp_config)
+    res = service.snapshot_playlist("pl-beatles")
+    assert res["status"] == "created"
+
+    hist = service.get_historical_track(26995301)
+    assert hist is not None
+    assert hist["has_provider_replacement"] is True
+    assert hist["provider_replacement_id"] == "36142925"
+
+
+def test_snapshot_reactive_replacement_alerting(temp_config: ConfigManager):
+    mock_provider = MagicMock()
+    mock_provider.name = "tidal"
+    mock_pl = MagicMock(id="pl-alerts")
+    mock_pl.name = "Unavailable Alert Playlist"
+    mock_provider.get_playlist.return_value = mock_pl
+
+    t_unavail = MagicMock(id=999999, isrc="FRZ016409999", duration=150, available=False, allow_streaming=False, stream_ready=False)
+    t_unavail.name = "Purged Song"
+    t_unavail.artist.name = "Some Artist"
+    t_unavail.album.name = "Some Album"
+    t_unavail.album.upc = "00000000"
+    t_unavail.album.release_date = "2010-01-01"
+
+    rep_track = MagicMock(id=888888, isrc="FRZ016409999", duration=150, available=True, allow_streaming=True, stream_ready=True)
+    rep_track.name = "Purged Song (Remastered)"
+    rep_track.artist.name = "Some Artist"
+
+    mock_provider.get_playlist_tracks.return_value = [t_unavail]
+    mock_provider.get_playlist_track_replacements.return_value = {}
+    mock_provider.get_track_replacement.return_value = rep_track
+
+    service = SnapshotService(provider=mock_provider, cfg=temp_config)
+    res = service.snapshot_playlist("pl-alerts", alert_on_unavailable=True)
+
+    unavail = res["unavailable_tracks"]
+    assert len(unavail) == 1
+    assert unavail[0]["has_provider_replacement"] is True
+    assert unavail[0]["provider_replacement_id"] == "888888"
+
+    recent_alerts = service.get_recent_alerts(limit=5)
+    assert len(recent_alerts) >= 1
+    alert = recent_alerts[0]
+    assert alert["has_provider_replacement"] is True
+    assert alert["provider_replacement_id"] == "888888"
+    assert "Official replacement available" in alert["message"]

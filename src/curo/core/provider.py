@@ -151,3 +151,12 @@ class MusicProvider(ABC):
         """Search track catalog by query string."""
         ...
 
+    # --- Catalog Relinking & Replacement Relationships ---
+    def get_track_replacement(self, track_id: str) -> Optional[Track]:
+        """Inspect provider's replacement relationship for a track and return active replacement if available."""
+        return None
+
+    def get_playlist_track_replacements(self, playlist_id: str) -> Dict[str, str]:
+        """Inspect playlist for tracks replaced by provider, returning mapping of original_id to replacement_id."""
+        return {}
+

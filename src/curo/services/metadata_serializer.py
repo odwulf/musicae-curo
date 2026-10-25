@@ -160,6 +160,8 @@ def serialize_track(track: Any) -> Dict[str, Any]:
         "date_added": _clean_str(getattr(track, "date_added", None)),
         "available": _clean_bool(getattr(track, "available", True)),
         "version": _clean_str(getattr(track, "version", None)),
+        "provider_replacement_id": _clean_str(getattr(track, "provider_replacement_id", None)) or (track.get("provider_replacement_id") if isinstance(track, dict) else None),
+        "has_provider_replacement": bool(_clean_str(getattr(track, "provider_replacement_id", None)) or (track.get("provider_replacement_id") if isinstance(track, dict) else None)),
         "listen_url": _clean_str(getattr(track, "listen_url", None)),
         "share_url": _clean_str(getattr(track, "share_url", None)),
         "artist": _serialize_artist(getattr(track, "artist", None)),

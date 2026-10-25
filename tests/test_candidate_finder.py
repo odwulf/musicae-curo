@@ -35,3 +35,71 @@ def test_candidate_finder_isrc_and_search_fallback():
     assert str(best.candidate.id) == "202"
     assert best.score >= 0.8
     assert best.isrc_match is True
+
+
+def test_candidate_finder_tier_0_official_replacement():
+    session = MagicMock()
+
+    # Unavailable original track
+    orig = MagicMock(id=101, isrc=None, duration=137)
+    orig.name = "Je veux prendre ta main"
+    orig.artist.name = "Frank Alamo"
+    orig.album.upc = None
+    orig.album.name = "Salut Les Copains"
+
+    # Official replacement candidate
+    rep_track = MagicMock(id=36142925, isrc="FRZ016402450", duration=136, available=True, allow_streaming=True, stream_ready=True)
+    rep_track.name = "Je veux prendre ta main"
+    rep_track.artist.name = "Frank Alamo"
+    rep_track.album.upc = "00044006463827"
+    rep_track.album.name = "Tendres Annees"
+
+    provider = MagicMock()
+    provider.get_track_replacement.return_value = rep_track
+    provider.get_tracks_by_isrc.return_value = []
+    provider.get_albums_by_barcode.return_value = []
+    provider.search_tracks.return_value = []
+
+    finder = CandidateFinder(provider)
+    candidates = finder.find_candidates(orig)
+
+    assert len(candidates) >= 1
+    best = candidates[0]
+    assert str(best.candidate.id) == "36142925"
+    assert best.score >= 0.95
+    assert best.is_provider_replacement is True
+    assert "Official provider replacement" in best.reasoning
+
+
+def test_candidate_finder_tier_0_from_historical_cache():
+    orig = MagicMock(id=101, isrc=None, duration=137)
+    orig.name = "Je veux prendre ta main"
+    orig.artist.name = "Frank Alamo"
+    orig.album = None
+
+    rep_track = MagicMock(id=36142925, isrc="FRZ016402450", duration=136, available=True, allow_streaming=True, stream_ready=True)
+    rep_track.name = "Je veux prendre ta main"
+    rep_track.artist.name = "Frank Alamo"
+    rep_track.album = None
+
+    snapshot_svc = MagicMock()
+    snapshot_svc.get_historical_track.return_value = {
+        "isrc": "FRZ016402450",
+        "provider_replacement_id": "36142925",
+    }
+
+    provider = MagicMock()
+    provider.get_track.return_value = rep_track
+    provider.get_track_replacement.return_value = None
+    provider.get_tracks_by_isrc.return_value = []
+    provider.get_albums_by_barcode.return_value = []
+    provider.search_tracks.return_value = []
+
+    finder = CandidateFinder(provider, snapshot_service=snapshot_svc)
+    candidates = finder.find_candidates(orig)
+
+    assert len(candidates) >= 1
+    best = candidates[0]
+    assert str(best.candidate.id) == "36142925"
+    assert best.is_provider_replacement is True
+    assert best.score >= 0.95

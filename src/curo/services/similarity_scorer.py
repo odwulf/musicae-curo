@@ -93,6 +93,7 @@ class CandidateEvaluation:
         release_date_match: bool = False,
         requires_manual_approval: bool = False,
         disqualified: bool = False,
+        is_provider_replacement: bool = False,
     ) -> None:
         self.candidate = candidate_track
         self.score = round(max(0.0, min(1.0, score)), 4)
@@ -104,6 +105,7 @@ class CandidateEvaluation:
         self.release_date_match = release_date_match
         self.requires_manual_approval = requires_manual_approval
         self.disqualified = disqualified
+        self.is_provider_replacement = is_provider_replacement
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert evaluation to serializable dictionary."""
@@ -132,6 +134,7 @@ class CandidateEvaluation:
             "meets_threshold": False,  # Evaluated by caller against configured threshold
             "requires_manual_approval": self.requires_manual_approval,
             "disqualified": self.disqualified,
+            "is_provider_replacement": self.is_provider_replacement,
             "reasoning": self.reasoning,
             "breakdown": {
                 "isrc_match": self.isrc_match,
@@ -139,6 +142,7 @@ class CandidateEvaluation:
                 "release_date_match": self.release_date_match,
                 "title_similarity": self.title_similarity,
                 "duration_delta_seconds": self.duration_delta,
+                "is_provider_replacement": self.is_provider_replacement,
             },
         }
 
@@ -151,10 +155,15 @@ def evaluate_candidate(
     original_release_date: Optional[Any] = None,
     candidate_release_date: Optional[Any] = None,
     original_isrc: Optional[str] = None,
+    is_provider_replacement: bool = False,
 ) -> CandidateEvaluation:
     """Evaluate candidate against original track, producing similarity score and reasoning."""
     reasoning_parts = []
     points = 0.0
+
+    if is_provider_replacement:
+        points += 20.0
+        reasoning_parts.append("Official provider replacement designated by streaming service (+20 pts).")
 
     # -----------------------------------------------------------------------
     # Core Metadata Matching (Base: up to 80 points)
@@ -354,6 +363,8 @@ def evaluate_candidate(
 
     requires_manual_approval = False
     raw_score = points / 100.0
+    if is_provider_replacement and not any(tag in cand_tags for tag in ("live", "acoustic", "instrumental", "remix")):
+        raw_score = max(raw_score, 0.95)
 
     if "live" not in orig_tags and "live" in cand_tags:
         raw_score = min(raw_score * 0.4, 0.35)
@@ -396,4 +407,5 @@ def evaluate_candidate(
         release_date_match=release_date_match,
         requires_manual_approval=requires_manual_approval,
         disqualified=False,
+        is_provider_replacement=is_provider_replacement,
     )

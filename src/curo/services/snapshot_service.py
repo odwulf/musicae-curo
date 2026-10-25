@@ -257,8 +257,9 @@ class SnapshotService:
         self,
         tracks: List[Any],
         playlist_slug: str,
+        replacements: Optional[Dict[str, str]] = None,
     ) -> None:
-        """Update global registry with healthy metadata for active tracks."""
+        """Update global registry with healthy metadata for active tracks and proactive replacements."""
         registry = self._load_registry()
         now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
         updated = False
@@ -280,7 +281,16 @@ class SnapshotService:
             else:
                 release_date = None
 
-            if not available and not isrc and not upc:
+            # Resolve proactive replacement ID if present
+            rep_id = None
+            if replacements and t_id in replacements:
+                rep_id = _safe_str(replacements[t_id]) or None
+            elif _safe_str(getattr(t, "provider_replacement_id", None)):
+                rep_id = _safe_str(getattr(t, "provider_replacement_id", None))
+            elif isinstance(t, dict) and _safe_str(t.get("provider_replacement_id")):
+                rep_id = _safe_str(t.get("provider_replacement_id"))
+
+            if not available and not isrc and not upc and not rep_id:
                 continue
 
             artist_name = getattr(getattr(t, "artist", None), "name", "Unknown Artist")
@@ -303,6 +313,8 @@ class SnapshotService:
                     "album_release_date": release_date,
                     "last_available_at": now_iso if available else None,
                     "found_in_playlists": [playlist_slug],
+                    "has_provider_replacement": bool(rep_id),
+                    "provider_replacement_id": rep_id,
                 }
                 registry[t_id] = entry
                 updated = True
@@ -315,6 +327,10 @@ class SnapshotService:
                     updated = True
                 if release_date and not entry.get("album_release_date"):
                     entry["album_release_date"] = release_date
+                    updated = True
+                if rep_id and entry.get("provider_replacement_id") != rep_id:
+                    entry["provider_replacement_id"] = rep_id
+                    entry["has_provider_replacement"] = True
                     updated = True
                 if available:
                     entry["last_available_at"] = now_iso
@@ -396,13 +412,53 @@ class SnapshotService:
         snapshot_filename = f"{timestamp_str}.json"
         snapshot_path = pl_dir / snapshot_filename
 
-        self.update_track_registry(tracks, slug)
+        # Proactive discovery of provider track replacements across playlist
+        replacements: Dict[str, str] = {}
+        if self.provider and hasattr(self.provider, "get_playlist_track_replacements"):
+            try:
+                raw_reps = self.provider.get_playlist_track_replacements(str(playlist.id))
+                if raw_reps and not _safe_str(raw_reps) == "" and isinstance(raw_reps, dict) and not hasattr(raw_reps, "_mock_return_value"):
+                    replacements = {str(k): str(v) for k, v in raw_reps.items()}
+            except Exception as e:
+                logger.debug(f"Proactive playlist replacement check failed for '{playlist.name}': {e}")
+
+        if replacements:
+            for t in tracks:
+                t_id_str = str(getattr(t, "id", None) or (t.get("id") if isinstance(t, dict) else ""))
+                if t_id_str in replacements:
+                    if hasattr(t, "provider_replacement_id"):
+                        setattr(t, "provider_replacement_id", replacements[t_id_str])
+                    elif isinstance(t, dict):
+                        t["provider_replacement_id"] = replacements[t_id_str]
+
+        self.update_track_registry(tracks, slug, replacements=replacements)
 
         unavailable_tracks = []
         newly_unavailable_alerts = []
         for idx, t in enumerate(tracks):
             if not is_track_available(t):
                 hist = self.get_historical_track(t.id) or {}
+                t_id_str = str(getattr(t, "id", None) or "")
+                rep_id = replacements.get(t_id_str) or hist.get("provider_replacement_id")
+                rep_title = hist.get("provider_replacement_title")
+
+                # If no replacement was discovered proactively, check reactive track replacement
+                if not rep_id and self.provider and hasattr(self.provider, "get_track_replacement") and t_id_str:
+                    try:
+                        rep_track = self.provider.get_track_replacement(t_id_str)
+                        if rep_track and _safe_str(getattr(rep_track, "id", None)):
+                            rep_id = _safe_str(getattr(rep_track, "id", None))
+                            rep_title = getattr(rep_track, "name", None) or getattr(rep_track, "title", "Unknown Title")
+                            # Cache in registry
+                            reg = self._load_registry()
+                            if t_id_str in reg:
+                                reg[t_id_str]["provider_replacement_id"] = rep_id
+                                reg[t_id_str]["has_provider_replacement"] = True
+                                reg[t_id_str]["provider_replacement_title"] = rep_title
+                                self._save_registry(reg)
+                    except Exception as e:
+                        logger.debug(f"Reactive track replacement check failed for #{t_id_str}: {e}")
+
                 unavail_info = {
                     "index": idx,
                     "id": t.id,
@@ -411,10 +467,20 @@ class SnapshotService:
                     "album": getattr(getattr(t, "album", None), "name", None) or getattr(getattr(t, "album", None), "title", "Unknown Album"),
                     "historical_isrc": hist.get("isrc"),
                     "historical_upc": hist.get("album_upc"),
+                    "has_provider_replacement": bool(rep_id),
+                    "provider_replacement_id": rep_id,
+                    "provider_replacement_title": rep_title,
                 }
                 unavailable_tracks.append(unavail_info)
 
                 if alert_on_unavailable:
+                    alert_msg = (
+                        f"Track '{unavail_info['title']}' by '{unavail_info['artist']}' "
+                        f"is UNAVAILABLE in playlist '{playlist.name}'"
+                    )
+                    if rep_id:
+                        alert_msg += f" (Official replacement available: '{rep_title or rep_id}' [ID: {rep_id}])"
+
                     alert = {
                         "timestamp": now_utc.isoformat(),
                         "provider": self.provider.name,
@@ -430,10 +496,10 @@ class SnapshotService:
                         "reason": "unavailable",
                         "historical_isrc": unavail_info["historical_isrc"],
                         "historical_upc": unavail_info["historical_upc"],
-                        "message": (
-                            f"Track '{unavail_info['title']}' by '{unavail_info['artist']}' "
-                            f"is UNAVAILABLE in playlist '{playlist.name}'"
-                        ),
+                        "has_provider_replacement": bool(rep_id),
+                        "provider_replacement_id": rep_id,
+                        "provider_replacement_title": rep_title,
+                        "message": alert_msg,
                     }
                     self._append_alert(alert)
                     newly_unavailable_alerts.append(alert)

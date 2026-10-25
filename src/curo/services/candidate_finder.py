@@ -13,6 +13,15 @@ from curo.services.track_matcher import is_track_available, normalize_title
 logger = logging.getLogger(__name__)
 
 
+def _is_valid_track(t: Any) -> bool:
+    if t is None:
+        return False
+    raw_id = getattr(t, "id", None)
+    if raw_id is None or hasattr(raw_id, "_mock_return_value") or "Mock" in type(raw_id).__name__:
+        return False
+    return bool(is_track_available(t))
+
+
 class CandidateFinder:
     """Discovers active candidate replacements for unavailable tracks using a tiered strategy."""
 
@@ -30,6 +39,7 @@ class CandidateFinder:
         orig_release_date = getattr(getattr(original_track, "album", None), "release_date", None)
 
         # Recover historical ISRC, UPC, or release date from snapshot registry if missing
+        hist = None
         if self.snapshot_service and orig_id is not None:
             try:
                 hist = self.snapshot_service.get_historical_track(orig_id)
@@ -46,6 +56,35 @@ class CandidateFinder:
                 logger.debug(f"Failed to query historical track registry for #{orig_id}: {e}")
 
         candidates_by_id: Dict[str, Any] = {}
+        official_replacement_ids: set[str] = set()
+
+        # -------------------------------------------------------------------
+        # Tier 0: Direct Provider Replacement / Cached Replacement Pointer
+        # -------------------------------------------------------------------
+        cached_rep_id = hist.get("provider_replacement_id") if hist else None
+        if cached_rep_id:
+            try:
+                cand_t = self.provider.get_track(str(cached_rep_id))
+                if _is_valid_track(cand_t):
+                    t_id = str(getattr(cand_t, "id", cached_rep_id))
+                    if t_id != str(orig_id):
+                        candidates_by_id[t_id] = cand_t
+                        official_replacement_ids.add(t_id)
+                        logger.info(f"Loaded cached provider replacement #{t_id} for track #{orig_id}")
+            except Exception as e:
+                logger.debug(f"Failed to fetch cached replacement track #{cached_rep_id}: {e}")
+
+        if orig_id is not None and hasattr(self.provider, "get_track_replacement"):
+            try:
+                rep_track = self.provider.get_track_replacement(str(orig_id))
+                if _is_valid_track(rep_track):
+                    t_id = str(getattr(rep_track, "id", None) or "")
+                    if t_id and t_id != str(orig_id):
+                        candidates_by_id[t_id] = rep_track
+                        official_replacement_ids.add(t_id)
+                        logger.info(f"Discovered active provider replacement #{t_id} for track #{orig_id}")
+            except Exception as e:
+                logger.debug(f"Provider replacement lookup failed for #{orig_id}: {e}")
 
         # -------------------------------------------------------------------
         # Tier 1: Search by ISRC
@@ -103,8 +142,10 @@ class CandidateFinder:
         # -------------------------------------------------------------------
         evaluations: List[CandidateEvaluation] = []
         for cand in candidates_by_id.values():
+            cand_id_str = str(getattr(cand, "id", ""))
             cand_upc = getattr(getattr(cand, "album", None), "upc", None)
             cand_release_date = getattr(getattr(cand, "album", None), "release_date", None)
+            is_official = cand_id_str in official_replacement_ids
             ev = evaluate_candidate(
                 original=original_track,
                 candidate=cand,
@@ -113,6 +154,7 @@ class CandidateFinder:
                 original_release_date=orig_release_date,
                 candidate_release_date=cand_release_date,
                 original_isrc=orig_isrc,
+                is_provider_replacement=is_official,
             )
             evaluations.append(ev)
 

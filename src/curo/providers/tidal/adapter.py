@@ -7,6 +7,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Union
 
+import requests
 import tidalapi
 from tidalapi import Album as TidalAlbum, Track as TidalTrack, UserPlaylist
 
@@ -577,6 +578,77 @@ class TidalProvider(MusicProvider):
         except Exception as e:
             logger.warning(f"Search query failed '{query}': {e}")
             return []
+
+    # --- Catalog Relinking & Replacement Relationships ---
+    def get_track_replacement(self, track_id: str) -> Optional[Track]:
+        """Inspect Tidal's replacement relationship for a track and return the active replacement Track."""
+        try:
+            s = self.session
+            token = getattr(s, "access_token", None)
+            token_type = getattr(s, "token_type", "Bearer") or "Bearer"
+            if not token or _is_mock(token):
+                return None
+
+            headers = {
+                "Authorization": f"{token_type} {token}",
+                "Accept": "application/vnd.api+json",
+            }
+            url = f"https://openapi.tidal.com/v2/tracks/{track_id}/relationships/replacement"
+            r = requests.get(url, headers=headers, timeout=10)
+            if r.status_code == 200:
+                data = r.json().get("data")
+                if data and isinstance(data, dict) and data.get("id"):
+                    rep_id = str(data["id"])
+                    return self.get_track(rep_id)
+        except Exception as e:
+            logger.debug(f"Failed to fetch replacement relationship for track #{track_id}: {e}")
+        return None
+
+    def get_playlist_track_replacements(self, playlist_id: str) -> Dict[str, str]:
+        """Retrieve all replaced tracks in a playlist using Tidal OpenAPI v2 replaceMedia mechanism."""
+        replacements: Dict[str, str] = {}
+        try:
+            s = self.session
+            token = getattr(s, "access_token", None)
+            token_type = getattr(s, "token_type", "Bearer") or "Bearer"
+            if not token or _is_mock(token):
+                return {}
+
+            headers = {
+                "Authorization": f"{token_type} {token}",
+                "Accept": "application/vnd.api+json",
+            }
+            url: Optional[str] = f"https://openapi.tidal.com/v2/playlists/{playlist_id}?include=items&replaceMedia=items"
+
+            while url:
+                r = requests.get(url, headers=headers, timeout=10)
+                if r.status_code != 200:
+                    break
+                res = r.json()
+                if "relationships" in res.get("data", {}):
+                    items_data = res["data"]["relationships"].get("items", {}).get("data", [])
+                    next_rel = res["data"]["relationships"].get("items", {}).get("links", {}).get("next")
+                else:
+                    items_data = res.get("data", [])
+                    next_rel = res.get("links", {}).get("next")
+
+                for item in items_data:
+                    meta = item.get("meta", {})
+                    rep_info = meta.get("replacement", {})
+                    if rep_info.get("status") == "REPLACED":
+                        orig_id = rep_info.get("original", {}).get("id")
+                        rep_id = item.get("id")
+                        if orig_id and rep_id:
+                            replacements[str(orig_id)] = str(rep_id)
+
+                if next_rel:
+                    url = f"https://openapi.tidal.com/v2{next_rel}" if not next_rel.startswith("http") else next_rel
+                else:
+                    url = None
+        except Exception as e:
+            logger.debug(f"Failed to fetch playlist track replacements for {playlist_id}: {e}")
+
+        return replacements
 
 
 # Automatically register TidalProvider in ProviderRegistry

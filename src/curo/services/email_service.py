@@ -220,17 +220,20 @@ Dispatched automatically by Musicae Curo.
                     "title": html.escape(str(un_track.get("title", un_track.get("track_title", "Unknown Title")))),
                     "artist": html.escape(str(un_track.get("artist", un_track.get("artist_name", "Unknown Artist")))),
                     "has_recovery": bool(un_track.get("historical_isrc") or un_track.get("historical_upc")),
+                    "has_replacement": bool(un_track.get("has_provider_replacement") or un_track.get("provider_replacement_id")),
+                    "replacement_id": un_track.get("provider_replacement_id"),
                 })
 
         delisted_html = ""
         if delisted_items:
             items_html = []
             for d in delisted_items:
-                recovery_tag = (
-                    '<span style="font-size: 11px; background-color: #e0e7ff; color: #3730a3; padding: 2px 6px; border-radius: 4px; margin-left: 6px;">ISRC/UPC Cached</span>'
-                    if d["has_recovery"]
-                    else '<span style="font-size: 11px; background-color: #f1f5f9; color: #64748b; padding: 2px 6px; border-radius: 4px; margin-left: 6px;">No Cache</span>'
-                )
+                if d.get("has_replacement"):
+                    recovery_tag = '<span style="font-size: 11px; background-color: #d1fae5; color: #065f46; padding: 2px 6px; border-radius: 4px; margin-left: 6px;">Official Replacement Ready</span>'
+                elif d["has_recovery"]:
+                    recovery_tag = '<span style="font-size: 11px; background-color: #e0e7ff; color: #3730a3; padding: 2px 6px; border-radius: 4px; margin-left: 6px;">ISRC/UPC Cached</span>'
+                else:
+                    recovery_tag = '<span style="font-size: 11px; background-color: #f1f5f9; color: #64748b; padding: 2px 6px; border-radius: 4px; margin-left: 6px;">No Cache</span>'
                 items_html.append(
                     f'<li style="margin-bottom: 6px; font-size: 13px;"><strong>{d["title"]}</strong> by {d["artist"]} <span style="color: #64748b;">(in <em>{d["playlist"]}</em>)</span>{recovery_tag}</li>'
                 )
@@ -560,7 +563,9 @@ Dispatched automatically by Musicae Curo.
                 for u in unavail:
                     u_title = u.get("title", u.get("track_title", "Unknown Title"))
                     u_art = u.get("artist", u.get("artist_name", ""))
-                    lines.append(f"  ! Unavailable: {u_title} {f'by {u_art}' if u_art else ''}")
+                    rep_id = u.get("provider_replacement_id")
+                    rep_suffix = f" [Official Replacement ID: {rep_id}]" if rep_id else ""
+                    lines.append(f"  ! Unavailable: {u_title} {f'by {u_art}' if u_art else ''}{rep_suffix}")
             else:
                 lines.append(f"* {raw_p_name} (v{ver}):")
                 for t in relinked:
@@ -577,7 +582,9 @@ Dispatched automatically by Musicae Curo.
                 for u in unavail:
                     u_title = u.get("title", u.get("track_title", "Unknown Title"))
                     u_art = u.get("artist", u.get("artist_name", ""))
-                    lines.append(f"  ! Unavailable: {u_title} {f'by {u_art}' if u_art else ''}")
+                    rep_id = u.get("provider_replacement_id")
+                    rep_suffix = f" [Official Replacement ID: {rep_id}]" if rep_id else ""
+                    lines.append(f"  ! Unavailable: {u_title} {f'by {u_art}' if u_art else ''}{rep_suffix}")
             lines.append("")
 
         lines.extend([

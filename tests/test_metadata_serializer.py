@@ -147,3 +147,10 @@ def test_serialize_playlist():
     json_str = json.dumps(data, indent=2)
     assert "Classic Rock Gems" in json_str
 
+
+def test_serialize_track_with_provider_replacement():
+    track = make_full_mock_track()
+    track.provider_replacement_id = "36142925"
+    data = serialize_track(track)
+    assert data["provider_replacement_id"] == "36142925"
+    assert data["has_provider_replacement"] is True

@@ -603,7 +603,8 @@ def playlist_repair(
         orig_artist = orig.get("artist", "Unknown Artist")
 
         if best:
-            cand_title = f"{best['title']} (ID: {best['id']})"
+            official_badge = " [cyan][Official Replacement][/cyan]" if best.get("is_provider_replacement") else ""
+            cand_title = f"{best['title']} (ID: {best['id']}){official_badge}"
             score_val = best.get("similarity_score", 0.0)
             score_pct = f"{score_val * 100:.1f}%"
             score_style = (

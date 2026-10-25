@@ -223,21 +223,30 @@ Running `curo playlist snapshot` executes incremental versioning:
 3. If the hash matches the last snapshot, no file is written (`status: unchanged`).
 4. If modified, a new version file `YYYY-MM-DD_<version>.json` is saved, computing exact additions, removals, and reorderings.
 
-### Historical Track Metadata Registry (`track_registry.json`)
+### Historical Track Metadata Registry (`snapshots/index.json`)
 When streaming services delist or retire a track, its metadata (such as ISRC or album UPC) is often erased from active API responses.
-`SnapshotService` automatically registers every healthy track encountered into `track_registry.json`. When a track becomes delisted:
-- `CandidateFinder` queries `track_registry.json` using the retired track's ID.
-- Recovers the original ISRC, Album UPC, and release date.
-- Queries the streaming provider by ISRC to locate an active reissue or replacement with high confidence.
+`SnapshotService` automatically registers every healthy track encountered into `snapshots/index.json`.
+
+#### Proactive & Reactive Provider Replacement Recording
+In addition to caching historical ISRCs, UPC barcodes, and release dates:
+- **Proactive Recording**: During routine playlist snapshots, `SnapshotService` inspects provider replacement relationships (e.g. TIDAL's OpenAPI `replaceMedia=items`). When a provider silently links an active or superseded track to a replacement release under the hood, Curo records `provider_replacement_id` and `has_provider_replacement: true` into the registry immediately, before the original track ever goes missing.
+- **Reactive Fallback**: If an unavailable track is detected without prior proactive cache, `SnapshotService` queries `get_track_replacement(track_id)` directly, recording the official replacement ID in the availability alert and morning email digest.
 
 ---
 
 ## 5. Intelligent Playlist Repair & Scoring Engine
 
-`PlaylistRepairService` identifies unavailable tracks (`available: false` or `allow_streaming: false`) and scores potential replacements using a 100-point explainable algorithm:
+`PlaylistRepairService` identifies unavailable tracks (`available: false` or `allow_streaming: false`) and discovers replacements using a 4-tier candidate resolution pipeline:
+- **Tier 0 (Direct Provider Replacement)**: Inspects proactive registry cache or queries provider replacement endpoint (`get_track_replacement`).
+- **Tier 1 (ISRC Sound Recording Lookup)**: Queries streaming catalog using recovered historical ISRC.
+- **Tier 2 (Album UPC Barcode Lookup)**: Queries album releases using recovered historical UPC barcode.
+- **Tier 3 (Fuzzy Metadata Search)**: Fallback search using normalized title and primary artist name.
+
+Candidates are evaluated and ranked using a 100-point explainable algorithm:
 
 | Factor | Points | Evaluation Details |
 | :--- | :--- | :--- |
+| **Official Provider Replacement** | +20 (>=95% guaranteed) | Direct vendor-designated replacement (e.g. TIDAL replacement relationship graph). |
 | **ISRC Match** | +30 | Exact sound recording match (authoritative cross-album identifier). |
 | **Album UPC** | +15 | Exact album barcode match (tracks from the exact same physical/digital release). |
 | **Title Match** | +30 | Normalized string similarity (strips remaster dates, version tags, audio markers). |
