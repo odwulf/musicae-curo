@@ -158,6 +158,10 @@ class JobRunner:
                 else:
                     raise JobExecutionError(f"Unknown action type: {action_type}")
 
+                if isinstance(res, dict) and res.get("success") is False:
+                    reason = res.get("reason") or "Action indicated failure"
+                    raise JobExecutionError(f"Action '{action_type}' in job '{job_name}' failed: {reason}")
+
                 action_results.append({"action": action_type, "status": "success", "result": res})
             except Exception as e:
                 logger.error(f"Action '{action_type}' failed: {e}", exc_info=True)
