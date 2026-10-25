@@ -181,16 +181,34 @@ class TidalProvider(MusicProvider):
         all_tracks: List[Track] = []
         offset = 0
         limit = 100
+
+        # Try to determine total items if supported by API/session
+        total_count = None
+        if hasattr(favs, "get_tracks_count"):
+            try:
+                cnt = favs.get_tracks_count()
+                if isinstance(cnt, int) and cnt >= 0:
+                    total_count = cnt
+            except Exception:
+                pass
+
         try:
+            consecutive_empty = 0
             while True:
+                if total_count is not None and offset >= total_count:
+                    break
                 page = favs.tracks(limit=limit, offset=offset)
                 if not page:
-                    break
+                    consecutive_empty += 1
+                    if consecutive_empty >= 2 or total_count is None or offset >= total_count:
+                        break
+                    offset += limit
+                    continue
+
+                consecutive_empty = 0
                 for t in page:
                     all_tracks.append(self.to_domain_track(t))
-                if len(page) < limit:
-                    break
-                offset += len(page)
+                offset += limit
         except Exception as e:
             logger.error(f"Error fetching Tidal favorite tracks at offset {offset}: {e}")
             raise
