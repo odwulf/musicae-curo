@@ -241,13 +241,16 @@ class TidalProvider(MusicProvider):
         success = True
         for i in range(0, len(track_ids), chunk_size):
             chunk = track_ids[i : i + chunk_size]
-            pos = (position + i) if position is not None else None
+            kwargs: Dict[str, Any] = {"allow_duplicates": True}
+            if position is not None:
+                kwargs["position"] = position + i
             try:
-                res = raw_pl.add(chunk, position=pos, allow_duplicates=True)
+                res = raw_pl.add(chunk, **kwargs)
                 if not res:
                     success = False
             except TypeError:
-                res = raw_pl.add(chunk, position=pos)
+                kwargs.pop("allow_duplicates", None)
+                res = raw_pl.add(chunk, **kwargs)
                 if not res:
                     success = False
         return success
