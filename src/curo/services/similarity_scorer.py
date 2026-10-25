@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import datetime
-from typing import Any, Dict, Optional, Set, Tuple
-from tidalapi.media import Track
+from typing import Any, Dict, Optional, Set, Tuple, Union
 
-from tidal_cli.services.track_matcher import (
+from curo.core.models import Track
+from curo.services.track_matcher import (
     compute_string_similarity,
     detect_version_tags,
     normalize_title,
@@ -48,17 +48,14 @@ def _extract_year(val: Any) -> Optional[int]:
     return None
 
 
-def _extract_artists_info(track: Any) -> Tuple[Optional[int], str, Set[int], Set[str]]:
+def _extract_artists_info(track: Any) -> Tuple[Optional[str], str, Set[str], Set[str]]:
     """Extract primary artist id/name and set of all contributing artist ids/names."""
     primary_art = getattr(track, "artist", None)
-    p_id = getattr(primary_art, "id", None)
-    if _is_mock(p_id):
-        p_id = None
-    p_name = getattr(primary_art, "name", "") or ""
-    if _is_mock(p_name):
-        p_name = ""
+    raw_p_id = getattr(primary_art, "id", None)
+    p_id = str(raw_p_id) if raw_p_id is not None and not _is_mock(raw_p_id) else None
+    p_name = _clean_str(getattr(primary_art, "name", "")) or ""
 
-    all_ids: Set[int] = set()
+    all_ids: Set[str] = set()
     all_names: Set[str] = set()
 
     if p_id is not None:
@@ -66,14 +63,16 @@ def _extract_artists_info(track: Any) -> Tuple[Optional[int], str, Set[int], Set
     if p_name:
         all_names.add(normalize_title(p_name))
 
-    artists_list = getattr(track, "artists", None)
+    # Support collaborating_artists (domain model) or artists (SDK model)
+    collab = getattr(track, "collaborating_artists", None)
+    artists_list = collab if (collab is not None and not _is_mock(collab)) else getattr(track, "artists", None)
     if isinstance(artists_list, (list, tuple)):
         for a in artists_list:
-            a_id = getattr(a, "id", None)
-            if a_id is not None and not _is_mock(a_id):
-                all_ids.add(a_id)
-            a_name = getattr(a, "name", "") or ""
-            if a_name and not _is_mock(a_name):
+            raw_a_id = getattr(a, "id", None)
+            if raw_a_id is not None and not _is_mock(raw_a_id):
+                all_ids.add(str(raw_a_id))
+            a_name = _clean_str(getattr(a, "name", "")) or ""
+            if a_name:
                 all_names.add(normalize_title(a_name))
 
     return p_id, p_name, all_ids, all_names
@@ -84,7 +83,7 @@ class CandidateEvaluation:
 
     def __init__(
         self,
-        candidate_track: Track,
+        candidate_track: Any,
         score: float,
         reasoning: str,
         isrc_match: bool,
@@ -109,20 +108,25 @@ class CandidateEvaluation:
     def to_dict(self) -> Dict[str, Any]:
         """Convert evaluation to serializable dictionary."""
         c = self.candidate
-        cand_artist = getattr(getattr(c, "artist", None), "name", "Unknown Artist")
-        cand_album = getattr(getattr(c, "album", None), "name", "Unknown Album")
-        cand_upc = getattr(getattr(c, "album", None), "upc", None)
+        cand_artist = _clean_str(getattr(getattr(c, "artist", None), "name", None)) or "Unknown Artist"
+        cand_album = _clean_str(getattr(getattr(c, "album", None), "name", None)) or _clean_str(getattr(getattr(c, "album", None), "title", None)) or "Unknown Album"
+        cand_upc = _clean_str(getattr(getattr(c, "album", None), "upc", None))
         raw_release_date = getattr(getattr(c, "album", None), "release_date", None)
         cand_release_date = _clean_str(raw_release_date)
 
+        c_title = _clean_str(getattr(c, "name", None)) or _clean_str(getattr(c, "title", None)) or ""
+        c_dur = getattr(c, "duration", None) or getattr(c, "duration_seconds", None)
+        if _is_mock(c_dur):
+            c_dur = None
+
         return {
-            "id": c.id,
-            "title": getattr(c, "name", ""),
+            "id": getattr(c, "id", None) if not _is_mock(getattr(c, "id", None)) else None,
+            "title": c_title,
             "artist": cand_artist,
             "album": cand_album,
             "album_release_date": cand_release_date,
-            "duration_seconds": getattr(c, "duration", None),
-            "isrc": getattr(c, "isrc", None),
+            "duration_seconds": c_dur,
+            "isrc": _clean_str(getattr(c, "isrc", None)),
             "album_upc": cand_upc,
             "similarity_score": self.score,
             "meets_threshold": False,  # Evaluated by caller against configured threshold
@@ -140,8 +144,8 @@ class CandidateEvaluation:
 
 
 def evaluate_candidate(
-    original: Track,
-    candidate: Track,
+    original: Any,
+    candidate: Any,
     original_upc: Optional[str] = None,
     candidate_upc: Optional[str] = None,
     original_release_date: Optional[Any] = None,
@@ -157,8 +161,8 @@ def evaluate_candidate(
     # -----------------------------------------------------------------------
 
     # 1. Title similarity (up to 30 points)
-    orig_title = _clean_str(getattr(original, "name", "")) or ""
-    cand_title = _clean_str(getattr(candidate, "name", "")) or ""
+    orig_title = _clean_str(getattr(original, "name", None)) or _clean_str(getattr(original, "title", None)) or ""
+    cand_title = _clean_str(getattr(candidate, "name", None)) or _clean_str(getattr(candidate, "title", None)) or ""
     title_sim = compute_string_similarity(orig_title, cand_title)
     points += title_sim * 30.0
 
@@ -177,6 +181,8 @@ def evaluate_candidate(
     cand_art_lower = cand_p_name.lower()
     if any(k in cand_art_lower for k in ("tribute", "karaoke", "cover band", "instrumental band")):
         reasoning_parts.append(f"[DISQUALIFIED] Tribute / Karaoke artist detected ('{cand_p_name}').")
+        orig_d = getattr(original, "duration", 0) or getattr(original, "duration_seconds", 0) or 0
+        cand_d = getattr(candidate, "duration", 0) or getattr(candidate, "duration_seconds", 0) or 0
         return CandidateEvaluation(
             candidate_track=candidate,
             score=0.05,
@@ -184,7 +190,7 @@ def evaluate_candidate(
             isrc_match=False,
             upc_match=False,
             title_similarity=title_sim,
-            duration_delta=abs((getattr(original, "duration", 0) or 0) - (getattr(candidate, "duration", 0) or 0)),
+            duration_delta=abs(orig_d - cand_d),
             requires_manual_approval=True,
             disqualified=True,
         )
@@ -198,20 +204,22 @@ def evaluate_candidate(
             reasoning_parts.append("Exact collaborating artists match (+25 pts).")
         elif orig_p_id in cand_ids:
             points += 24.0
-            reasoning_parts.append(f"Original primary artist present in candidate collaborators (+24 pts).")
+            reasoning_parts.append("Original primary artist present in candidate collaborators (+24 pts).")
         else:
             points += 22.0
-            reasoning_parts.append(f"Shared contributing artist ID match (+22 pts).")
+            reasoning_parts.append("Shared contributing artist ID match (+22 pts).")
     elif orig_p_name and cand_p_name and normalize_title(orig_p_name) == normalize_title(cand_p_name):
         points += 24.0
         reasoning_parts.append(f"Artist names match ('{orig_p_name}', +24 pts).")
     elif orig_names and cand_names and (orig_names & cand_names):
         points += 24.0
-        reasoning_parts.append(f"Shared collaborating artist name match (+24 pts).")
+        reasoning_parts.append("Shared collaborating artist name match (+24 pts).")
     else:
         art_sim = compute_string_similarity(orig_p_name, cand_p_name)
         if (orig_p_id and cand_p_id and orig_p_id != cand_p_id and art_sim < 0.6) or art_sim < 0.5:
             reasoning_parts.append(f"[DISQUALIFIED] Artist mismatch: '{cand_p_name}' vs '{orig_p_name}'.")
+            orig_d = getattr(original, "duration", 0) or getattr(original, "duration_seconds", 0) or 0
+            cand_d = getattr(candidate, "duration", 0) or getattr(candidate, "duration_seconds", 0) or 0
             return CandidateEvaluation(
                 candidate_track=candidate,
                 score=0.05,
@@ -219,7 +227,7 @@ def evaluate_candidate(
                 isrc_match=False,
                 upc_match=False,
                 title_similarity=title_sim,
-                duration_delta=abs((getattr(original, "duration", 0) or 0) - (getattr(candidate, "duration", 0) or 0)),
+                duration_delta=abs(orig_d - cand_d),
                 requires_manual_approval=True,
                 disqualified=True,
             )
@@ -228,9 +236,13 @@ def evaluate_candidate(
         reasoning_parts.append(f"Artist names differ slightly ('{cand_p_name}' vs '{orig_p_name}', +{round(art_pts, 1)} pts).")
 
     # 3. Duration delta (up to 15 points)
-    orig_dur = getattr(original, "duration", 0) or 0
-    cand_dur = getattr(candidate, "duration", 0) or 0
-    duration_delta = abs(orig_dur - cand_dur)
+    orig_dur = getattr(original, "duration", None) or getattr(original, "duration_seconds", None) or 0
+    if _is_mock(orig_dur):
+        orig_dur = 0
+    cand_dur = getattr(candidate, "duration", None) or getattr(candidate, "duration_seconds", None) or 0
+    if _is_mock(cand_dur):
+        cand_dur = 0
+    duration_delta = abs(int(orig_dur) - int(cand_dur))
 
     if duration_delta <= 1:
         points += 15.0
@@ -248,8 +260,16 @@ def evaluate_candidate(
         reasoning_parts.append(f"Duration differs significantly (diff: {duration_delta}s, +0 pts).")
 
     # 4. Album name match (up to 10 points)
-    orig_alb_name = _clean_str(getattr(getattr(original, "album", None), "name", "")) or ""
-    cand_alb_name = _clean_str(getattr(getattr(candidate, "album", None), "name", "")) or ""
+    orig_alb_name = (
+        _clean_str(getattr(getattr(original, "album", None), "name", None))
+        or _clean_str(getattr(getattr(original, "album", None), "title", None))
+        or ""
+    )
+    cand_alb_name = (
+        _clean_str(getattr(getattr(candidate, "album", None), "name", None))
+        or _clean_str(getattr(getattr(candidate, "album", None), "title", None))
+        or ""
+    )
     clean_orig_alb = normalize_title(orig_alb_name)
     clean_cand_alb = normalize_title(cand_alb_name)
     alb_sim = max(
@@ -265,7 +285,6 @@ def evaluate_candidate(
         points += alb_pts
         reasoning_parts.append(f"Similar album title ('{cand_alb_name}' vs '{orig_alb_name}', +{alb_pts} pts).")
     elif clean_orig_alb and clean_orig_alb == normalize_title(orig_title):
-        # Original was a self-titled single release (e.g. single absorbed into full album)
         points += 8.0
         reasoning_parts.append(
             f"Original was a single release ('{orig_alb_name}'); candidate is on full album ('{cand_alb_name}', +8 pts)."
@@ -336,7 +355,6 @@ def evaluate_candidate(
     requires_manual_approval = False
     raw_score = points / 100.0
 
-    # Severe penalty if candidate is live but original is not
     if "live" not in orig_tags and "live" in cand_tags:
         raw_score = min(raw_score * 0.4, 0.35)
         requires_manual_approval = True
@@ -345,7 +363,6 @@ def evaluate_candidate(
             "Requires manual approval; will not replace automatically."
         )
 
-    # Severe penalty if candidate is acoustic but original is not
     if "acoustic" not in orig_tags and "acoustic" in cand_tags:
         raw_score = min(raw_score * 0.5, 0.40)
         requires_manual_approval = True
@@ -354,7 +371,6 @@ def evaluate_candidate(
             "Requires manual approval."
         )
 
-    # Severe penalty if candidate is instrumental / karaoke but original is not
     if "instrumental" not in orig_tags and "instrumental" in cand_tags:
         raw_score = min(raw_score * 0.2, 0.20)
         requires_manual_approval = True
@@ -362,7 +378,6 @@ def evaluate_candidate(
             "[HEAVILY PENALIZED] Candidate is Instrumental / Karaoke. Requires manual approval."
         )
 
-    # Penalty if candidate is a remix but original is not
     if "remix" not in orig_tags and "remix" in cand_tags:
         raw_score = min(raw_score * 0.6, 0.50)
         requires_manual_approval = True

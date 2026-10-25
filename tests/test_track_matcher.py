@@ -1,7 +1,7 @@
 """Tests for track_matcher availability and title normalization."""
 
 from unittest.mock import MagicMock
-from tidal_cli.services.track_matcher import (
+from curo.services.track_matcher import (
     compute_string_similarity,
     detect_version_tags,
     is_track_available,

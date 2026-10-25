@@ -1,7 +1,8 @@
 """Tests for candidate_finder tiered search logic."""
 
 from unittest.mock import MagicMock
-from tidal_cli.services.candidate_finder import CandidateFinder
+from curo.providers.tidal import TidalProvider
+from curo.services.candidate_finder import CandidateFinder
 
 
 def test_candidate_finder_isrc_and_search_fallback():
@@ -25,12 +26,12 @@ def test_candidate_finder_isrc_and_search_fallback():
     session.get_albums_by_barcode.return_value = []
     session.search.return_value = {"tracks": []}
 
-    finder = CandidateFinder(session)
+    provider = TidalProvider(session=session)
+    finder = CandidateFinder(provider)
     candidates = finder.find_candidates(orig)
 
     assert len(candidates) >= 1
     best = candidates[0]
-    assert best.candidate.id == 202
+    assert str(best.candidate.id) == "202"
     assert best.score >= 0.8
     assert best.isrc_match is True
-

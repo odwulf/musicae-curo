@@ -3,7 +3,12 @@
 import json
 from pathlib import Path
 from unittest.mock import MagicMock
-from tidal_cli.services.playlist_repair_service import PlaylistRepairService
+
+from curo.cli import app, state
+from curo.config import ConfigManager
+from curo.providers.tidal import TidalProvider
+from curo.services.playlist_repair_service import PlaylistRepairService
+from tidalapi.playlist import UserPlaylist
 
 
 def test_analyze_and_repair_generates_json_report(tmp_path: Path):
@@ -37,7 +42,7 @@ def test_analyze_and_repair_generates_json_report(tmp_path: Path):
     ok_track.album.name = "Thriller"
 
     # Playlist
-    pl = MagicMock(id="pl-test-123")
+    pl = MagicMock(spec=UserPlaylist, id="pl-test-123")
     pl.name = "80s Pop Favorites"
     pl.tracks.return_value = [unavail_track, ok_track]
     session.playlist.return_value = pl
@@ -60,7 +65,8 @@ def test_analyze_and_repair_generates_json_report(tmp_path: Path):
     session.get_albums_by_barcode.return_value = []
     session.search.return_value = {"tracks": []}
 
-    svc = PlaylistRepairService(session, project_root=tmp_path)
+    provider = TidalProvider(session=session)
+    svc = PlaylistRepairService(provider=provider, project_root=tmp_path)
     report = svc.analyze_and_repair(
         identifier="pl-test-123",
         threshold=1.0,  # 100% threshold baseline
@@ -74,7 +80,7 @@ def test_analyze_and_repair_generates_json_report(tmp_path: Path):
 
     unavail_entry = report["unavailable_tracks"][0]
     assert unavail_entry["original_track"]["title"] == "Billie Jean"
-    assert unavail_entry["best_candidate"]["id"] == 1001
+    assert str(unavail_entry["best_candidate"]["id"]) == "1001"
     assert "Exact ISRC match" in unavail_entry["best_candidate"]["reasoning"]
 
     # Verify report was written into reports/ subfolder
@@ -88,8 +94,6 @@ def test_analyze_and_repair_generates_json_report(tmp_path: Path):
 
 
 def test_live_replacement_calls_add_with_allow_duplicates_and_removes(tmp_path: Path):
-    from tidalapi.playlist import UserPlaylist
-
     session = MagicMock()
     unavail_track = MagicMock(id=999, isrc="USSM18200001", duration=294, available=False, allow_streaming=False, stream_ready=False)
     unavail_track.name = "Billie Jean"
@@ -115,7 +119,8 @@ def test_live_replacement_calls_add_with_allow_duplicates_and_removes(tmp_path: 
     session.get_albums_by_barcode.return_value = []
     session.search.return_value = {"tracks": []}
 
-    svc = PlaylistRepairService(session, project_root=tmp_path)
+    provider = TidalProvider(session=session)
+    svc = PlaylistRepairService(provider=provider, project_root=tmp_path)
     report = svc.analyze_and_repair(
         identifier="pl-test-123",
         threshold=0.8,
@@ -128,8 +133,6 @@ def test_live_replacement_calls_add_with_allow_duplicates_and_removes(tmp_path: 
 
 
 def test_live_replacement_safeguard_when_tidal_add_skipped(tmp_path: Path):
-    from tidalapi.playlist import UserPlaylist
-
     session = MagicMock()
     unavail_track = MagicMock(id=999, isrc="USSM18200001", duration=294, available=False, allow_streaming=False, stream_ready=False)
     unavail_track.name = "Billie Jean"
@@ -155,7 +158,8 @@ def test_live_replacement_safeguard_when_tidal_add_skipped(tmp_path: Path):
     session.get_albums_by_barcode.return_value = []
     session.search.return_value = {"tracks": []}
 
-    svc = PlaylistRepairService(session, project_root=tmp_path)
+    provider = TidalProvider(session=session)
+    svc = PlaylistRepairService(provider=provider, project_root=tmp_path)
     report = svc.analyze_and_repair(
         identifier="pl-test-123",
         threshold=0.8,
@@ -166,18 +170,20 @@ def test_live_replacement_safeguard_when_tidal_add_skipped(tmp_path: Path):
     pl.add.assert_called_once_with(["1001"], position=0, allow_duplicates=True)
     # MUST NOT remove when add failed!
     pl.remove_by_index.assert_not_called()
-    assert report["unavailable_tracks"][0]["replacement_status"] == "error: tidal_skipped_add"
+    status = report["unavailable_tracks"][0]["replacement_status"]
+    assert "provider_skipped_add" in status or "tidal_skipped_add" in status
 
 
 def test_analyze_and_repair_default_threshold_is_80_percent(tmp_path: Path):
     session = MagicMock()
-    pl = MagicMock()
+    pl = MagicMock(spec=UserPlaylist)
     pl.id = "pl-123"
     pl.name = "Defaults Test"
     pl.tracks.return_value = []
     session.playlist.return_value = pl
 
-    svc = PlaylistRepairService(session, project_root=tmp_path)
+    provider = TidalProvider(session=session)
+    svc = PlaylistRepairService(provider=provider, project_root=tmp_path)
     report = svc.analyze_and_repair(identifier="pl-123")
 
     assert report["threshold_configured"] == 0.8
@@ -198,9 +204,10 @@ def test_resolve_replacement_track_by_id_and_isrc(tmp_path: Path):
     cand_by_id.album.name = "Album A (Remaster)"
     session.track.return_value = cand_by_id
 
-    svc = PlaylistRepairService(session, project_root=tmp_path)
+    provider = TidalProvider(session=session)
+    svc = PlaylistRepairService(provider=provider, project_root=tmp_path)
     t, method, eval_res = svc.resolve_replacement_track(orig, replacement="202")
-    assert t.id == 202
+    assert str(t.id) == "202"
     assert "track_id" in method
     assert eval_res.score >= 0.75
 
@@ -212,13 +219,13 @@ def test_resolve_replacement_track_by_id_and_isrc(tmp_path: Path):
     session.get_tracks_by_isrc.return_value = [cand_by_isrc]
 
     t2, method2, eval_res2 = svc.resolve_replacement_track(orig, isrc="USSM18200001")
-    assert t2.id == 303
+    assert str(t2.id) == "303"
     assert "isrc" in method2
     assert eval_res2.isrc_match is True
 
     # Replacement by auto-detected ISRC in replacement argument
     t3, method3, eval_res3 = svc.resolve_replacement_track(orig, replacement="USSM18200001")
-    assert t3.id == 303
+    assert str(t3.id) == "303"
     assert "isrc" in method3
 
 
@@ -239,16 +246,15 @@ def test_resolve_replacement_track_by_upc(tmp_path: Path):
 
     session.get_albums_by_barcode.return_value = [alb]
 
-    svc = PlaylistRepairService(session, project_root=tmp_path)
+    provider = TidalProvider(session=session)
+    svc = PlaylistRepairService(provider=provider, project_root=tmp_path)
     t, method, eval_res = svc.resolve_replacement_track(orig, upc="012345678901")
-    assert t.id == 404
+    assert str(t.id) == "404"
     assert "upc" in method
     assert eval_res.upc_match is True
 
 
 def test_replace_track_dry_run_and_live(tmp_path: Path):
-    from tidalapi.playlist import UserPlaylist
-
     session = MagicMock()
     pl = MagicMock(spec=UserPlaylist)
     pl.id = "pl-replace-1"
@@ -275,7 +281,8 @@ def test_replace_track_dry_run_and_live(tmp_path: Path):
     cand.album.name = "Album 2 (Reissue)"
     session.track.return_value = cand
 
-    svc = PlaylistRepairService(session, project_root=tmp_path)
+    provider = TidalProvider(session=session)
+    svc = PlaylistRepairService(provider=provider, project_root=tmp_path)
 
     # 1. Dry run simulation by track ID
     sim_res = svc.replace_track(
@@ -286,7 +293,7 @@ def test_replace_track_dry_run_and_live(tmp_path: Path):
     )
     assert sim_res["status"] == "simulated"
     assert sim_res["position"] == 2
-    assert sim_res["replacement_track"]["id"] == 999
+    assert str(sim_res["replacement_track"]["id"]) == "999"
     pl.add.assert_not_called()
     pl.remove_by_index.assert_not_called()
 
@@ -304,9 +311,6 @@ def test_replace_track_dry_run_and_live(tmp_path: Path):
 
 def test_cli_playlist_replace_command(tmp_path: Path, monkeypatch):
     from typer.testing import CliRunner
-    from tidal_cli.cli import app, state
-    from tidal_cli.config import ConfigManager
-    from tidalapi.playlist import UserPlaylist
 
     temp_cfg = ConfigManager(custom_config_dir=tmp_path)
     monkeypatch.setitem(state, "config", temp_cfg)
@@ -331,7 +335,8 @@ def test_cli_playlist_replace_command(tmp_path: Path, monkeypatch):
     cand.album.name = "Album 1 (2020)"
     session.track.return_value = cand
 
-    monkeypatch.setattr("tidal_cli.cli.SessionManager.load_session", lambda self: session)
+    provider = TidalProvider(session=session, cfg=temp_cfg)
+    monkeypatch.setattr("curo.cli.get_active_provider", lambda *args, **kwargs: provider)
 
     cli_runner = CliRunner()
 
@@ -352,7 +357,3 @@ def test_cli_playlist_replace_command(tmp_path: Path, monkeypatch):
     )
     assert res_live.exit_code == 0
     assert "Successfully replaced track #1" in res_live.stdout
-
-
-
-

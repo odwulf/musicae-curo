@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-import tidalapi
-from tidalapi.media import Track
-
-from tidal_cli.services.similarity_scorer import CandidateEvaluation, evaluate_candidate
-from tidal_cli.services.track_matcher import is_track_available, normalize_title
+from curo.core.models import Track
+from curo.core.provider import MusicProvider
+from curo.services.similarity_scorer import CandidateEvaluation, evaluate_candidate
+from curo.services.track_matcher import is_track_available, normalize_title
 
 logger = logging.getLogger(__name__)
 
@@ -17,15 +16,15 @@ logger = logging.getLogger(__name__)
 class CandidateFinder:
     """Discovers active candidate replacements for unavailable tracks using a tiered strategy."""
 
-    def __init__(self, session: tidalapi.Session, snapshot_service: Optional[Any] = None) -> None:
-        self.session = session
+    def __init__(self, provider: MusicProvider, snapshot_service: Optional[Any] = None) -> None:
+        self.provider = provider
         self.snapshot_service = snapshot_service
 
-    def find_candidates(self, original_track: Track, max_candidates: int = 10) -> List[CandidateEvaluation]:
+    def find_candidates(self, original_track: Any, max_candidates: int = 10) -> List[CandidateEvaluation]:
         """Find and rank replacement candidates for an unavailable track."""
         orig_id = getattr(original_track, "id", None)
         orig_isrc = getattr(original_track, "isrc", None)
-        orig_title = getattr(original_track, "name", "") or ""
+        orig_title = getattr(original_track, "name", None) or getattr(original_track, "title", "") or ""
         orig_artist = getattr(getattr(original_track, "artist", None), "name", "") or ""
         orig_upc = getattr(getattr(original_track, "album", None), "upc", None)
         orig_release_date = getattr(getattr(original_track, "album", None), "release_date", None)
@@ -46,14 +45,14 @@ class CandidateFinder:
             except Exception as e:
                 logger.debug(f"Failed to query historical track registry for #{orig_id}: {e}")
 
-        candidates_by_id: Dict[str, Track] = {}
+        candidates_by_id: Dict[str, Any] = {}
 
         # -------------------------------------------------------------------
         # Tier 1: Search by ISRC
         # -------------------------------------------------------------------
         if orig_isrc:
             try:
-                isrc_tracks = self.session.get_tracks_by_isrc(orig_isrc)
+                isrc_tracks = self.provider.get_tracks_by_isrc(orig_isrc)
                 for t in isrc_tracks or []:
                     t_id = str(t.id)
                     if t_id != str(orig_id) and is_track_available(t):
@@ -66,9 +65,16 @@ class CandidateFinder:
         # -------------------------------------------------------------------
         if orig_upc:
             try:
-                albums = self.session.get_albums_by_barcode(orig_upc)
+                albums = self.provider.get_albums_by_barcode(orig_upc)
                 for alb in albums or []:
-                    for t in alb.tracks() or []:
+                    # alb could be domain Album or SDK Album
+                    alb_id = getattr(alb, "id", None)
+                    tracks = (
+                        self.provider.get_album_tracks(str(alb_id))
+                        if alb_id
+                        else (alb.tracks() if hasattr(alb, "tracks") else [])
+                    )
+                    for t in tracks or []:
                         t_id = str(t.id)
                         if t_id != str(orig_id) and is_track_available(t):
                             if t_id not in candidates_by_id:
@@ -83,12 +89,7 @@ class CandidateFinder:
         query = f"{orig_artist} {clean_title}".strip()
         if query:
             try:
-                search_res = self.session.search(query, models=[Track], limit=20)
-                tracks = (
-                    search_res.get("tracks", [])
-                    if isinstance(search_res, dict)
-                    else getattr(search_res, "tracks", [])
-                )
+                tracks = self.provider.search_tracks(query, limit=20)
                 for t in tracks or []:
                     t_id = str(t.id)
                     if t_id != str(orig_id) and is_track_available(t):
@@ -115,8 +116,6 @@ class CandidateFinder:
             )
             evaluations.append(ev)
 
-        # Sort evaluations by score descending (highest quality candidate first)
         evaluations.sort(key=lambda x: x.score, reverse=True)
-
         return evaluations[:max_candidates]
 

@@ -1,411 +1,232 @@
-# TIDAL Schedulable CLI Client — Complete Documentation
+# Musicae Curo (`curo`) -- Complete Technical Documentation
 
-A headless-ready, schedulable Command Line Interface for TIDAL, tailored for automated Linux `cron` tasks, dynamic algorithmic mix aggregation, and playlist management.
+*Universal music library custodian, playlist protector, and daily discovery mix archiver.*
 
----
+Musicae Curo is a modular, provider-agnostic music library custodian CLI application designed for headless automation, playlist preservation, and algorithmic mix archival across music streaming platforms.
 
-## 1. Overview & Core Architecture
-
-`tidal-cli` is built with Python, [Typer](https://typer.tiangolo.com/), [Rich](https://rich.readthedocs.io/), and [`tidalapi`](https://github.com/EbbLabs/python-tidal). It is designed to run unattended on headless servers while also providing a rich terminal interface for interactive administration.
-
-```
-                    ┌─────────────────────────┐
-                    │      Linux Cron Job     │
-                    │   (e.g., 06:00 Daily)   │
-                    └────────────┬────────────┘
-                                 │
-                                 ▼
-                     tidal-cli job run <name>
-                                 │
-     ┌───────────────────────────┴───────────────────────────┐
-     ▼                                                       ▼
-[MixService]                                        [PlaylistService]
-- Dynamic Mix Discovery (1..N)                      - Read / List user playlists
-- Cross-Mix Deduplication (ID + ISRC)               - Create / Clear playlists
-- Random Fisher-Yates Shuffling                     - Safe chunked track addition (50/req)
-- Dated Daily Discovery Snapshot                    - Export (JSON, M3U8, CSV)
-     │                                                       │
-     └───────────────────────────┬───────────────────────────┘
-                                 ▼
-                         [SessionManager]
-                 - Local session (~/.config/tidal-cli/session.json)
-                 - Secure POSIX file permissions (0600)
-                 - Silent token refresh for expired sessions
-                                 │
-                                 ▼
-                        TIDAL API Service
-```
+> [!NOTE]
+> **Disclaimer & Project Origins**: This project was conceived to address personal music curation and playlist preservation workflows. All Python code and architectural designs were implemented with the aid of an AI coding agent. The author is not a software engineer and provides this repository openly as-is for the benefit of the community.
 
 ---
 
-## 2. Dynamic Algorithmic Mix Discovery
+## 1. Architecture & Design Principles
 
-### Zero-Assumption Design
-Tidal generates a dynamic number of algorithmic mixes for each user. Depending on an account's age, listening breadth, and genre variety, Tidal may provide anywhere from **1, 2, 4, 8, or more Daily Mixes**, in addition to **My Daily Discovery**.
+Musicae Curo adheres to strict Clean Architecture and Hexagonal / Port-and-Adapter principles:
 
-`tidal-cli` makes **zero assumptions** about the number or names of daily mixes:
-1. **Unconstrained Querying**: It queries Tidal's live mix feed (`session.mixes()`), user favorite mixes, and home categories.
-2. **Dynamic Filtering**:
-   - Matches `My Daily Discovery` via mix type (`DISCOVERY_MIX`) or discovery title keyword.
-   - Matches all available `Daily Mix` instances (`DAILY_MIX` or title matching `Daily Mix`).
-   - Filters out non-audio mixes (such as `Daily Video Mixes`).
-3. **Natural Sorting**: Sorts daily mixes naturally by number so `Daily Mix 2` correctly precedes `Daily Mix 10`.
-4. **Any Count $N$ Supported**: Whether an account currently has 1 daily mix, 8 daily mixes, or 15 daily mixes, all of them are automatically discovered and aggregated at runtime.
+```
+                            +--------------------------+
+                            |      Linux Cron Job      |
+                            |   (e.g., 06:00 Daily)    |
+                            +------------+-------------+
+                                         |
+                                         v
+                                curo job run <name>
+                                         |
+       +---------------------------------+---------------------------------+
+       |                                 |                                 |
+       v                                 v                                 v
+ [MixService]                   [PlaylistService]               [SnapshotService]
+ - Dynamic discovery (1..N)     - Playlist CRUD                 - SHA-256 versioning
+ - Dual deduplication (ID+ISRC) - Track chunking (50/req)       - Track history registry
+ - Fisher-Yates shuffle         - JSON/M3U8/CSV export          - Availability alerts log
+       |                                 |                                 |
+       +---------------------------------+---------------------------------+
+                                         |
+                                         v
+                           [PlaylistRepairService]
+                           - Scans unavailable tracks
+                           - Multi-tiered candidate discovery
+                           - 100-pt explainable scoring engine
+                           - Manual approval safeguards
+                                         |
+                                         v
+                         +-------------------------------+
+                         |   MusicProvider SPI (Core)    |
+                         +---------------+---------------+
+                                         |
+      +------------------+---------------+---------------+------------------+
+      |                  |               |               |                  |
+      v                  v               v               v                  v
+[TidalProvider]   [DeezerProvider][SpotifyProvider][QobuzProvider]  [YTMusicProvider]
+ (tidalapi SDK)      (Scaffold)      (Scaffold)      (Scaffold)        (Scaffold)
+```
+
+### Core Domain Models (`curo.core.models`)
+All domain services operate exclusively on pure, provider-agnostic domain models:
+- **`Track`**: Normalized track representation (`id`, `title`, `duration_seconds`, `isrc`, `available`, `allow_streaming`, `stream_ready`, `artist`, `collaborating_artists`, `album`, `provider`).
+- **`Album`**: Normalized album container (`id`, `title`, `upc`, `release_date`, `artists`, `provider`).
+- **`Artist`**: Normalized artist profile (`id`, `name`, `provider`).
+- **`Playlist`**: Container for user or curated playlists (`id`, `title`, `description`, `is_public`, `track_count`, `duration_seconds`, `last_updated`, `provider`).
+- **`CuratedMix`**: Ephemeral algorithmic mix representation (`id`, `title`, `sub_title`, `mix_type`, `provider`).
+
+### Provider SPI (`curo.core.provider.MusicProvider`)
+Every music streaming platform implements `MusicProvider`:
+- **Authentication**: `login()`, `logout()`, `get_auth_info()`, `is_authenticated()`.
+- **Playlists**: `get_user_playlists()`, `get_playlist()`, `get_playlist_tracks()`, `create_playlist()`, `add_tracks_to_playlist()`, `remove_track_from_playlist_by_index()`, `clear_playlist()`.
+- **Discovery Mixes**: `get_daily_discovery_mix()`, `get_daily_mixes()`.
+- **Search & Identifiers**: `get_track()`, `get_tracks_by_isrc()`, `get_album()`, `get_albums_by_barcode()`, `get_album_tracks()`, `search_tracks()`.
+
+### Provider Registry (`curo.core.registry.ProviderRegistry`)
+Adapters self-register into `ProviderRegistry`. At runtime, the active provider is chosen via:
+1. Command line option: `-p / --provider <name>` (e.g., `curo mix list -p tidal`).
+2. Local configuration default: `curo provider default <name>`.
+3. Default fallback: `"tidal"`.
 
 ---
 
-## 3. Daily Megamix & Deduplication Pipeline
+## 2. Directory Structure & File Permissions
 
-The primary automated use case consists of two routines:
+Musicae Curo manages its configuration and state in a secure dedicated directory:
 
-### A. Daily Discovery Backup
-Permanent archiving of today's ephemeral discovery mix:
-- Extracts track IDs from `My Daily Discovery`.
-- Creates or retrieves a dated playlist: `Discovery Backup - YYYY-MM-DD` (e.g., `Discovery Backup - 2026-10-18`).
-- Adds the tracks without duplicates.
-
-### B. Randomized Daily Megamix
-- **Harvesting**: Aggregates tracks from `My Daily Discovery` and **all** discovered `Daily Mixes`.
-- **Dual-Layer Deduplication**:
-  - Track ID check: Prevents duplicate track objects.
-  - ISRC (International Standard Recording Code) check: Prevents duplicate recordings or remasters of the same song across different mixes.
-- **Random Shuffling**: Shuffles the aggregated track list using cryptographic/system randomness (Fisher-Yates).
-- **Safe Batch Ingestion**: Adds tracks in chunks of 50 per API call to adhere to Tidal's request payload constraints and prevent network timeouts.
-- **Modes**:
-  - `replace` (default): Clears yesterday's Megamix and populates today's fresh randomized selection.
-  - `append`: Adds new tracks to the existing Megamix.
+| Path | Description | Permissions |
+| :--- | :--- | :--- |
+| `~/.config/curo/` | Root configuration directory | `0700` (`rwx------`) |
+| `~/.config/curo/config.json` | General config (default provider, SMTP setup, paths) | `0600` (`rw-------`) |
+| `~/.config/curo/jobs.yaml` | Declarative scheduled job definitions | `0600` (`rw-------`) |
+| `~/.config/curo/tidal_session.json` | OAuth token cache for Tidal adapter | `0600` (`rw-------`) |
+| `~/.config/curo/snapshots/<slug>/` | Incremental versioned SHA-256 JSON backups | `0700` (`rwx------`) |
+| `~/.config/curo/track_registry.json` | Historical healthy track metadata registry | `0600` (`rw-------`) |
+| `~/.config/curo/availability_alerts.log` | Append-only log of delisted tracks | `0600` (`rw-------`) |
+| `~/.config/curo/curo.log` | Persistent debug and cron operation logs | `0600` (`rw-------`) |
+| `./reports/` | Diagnostic JSON reports generated during playlist repairs | Project root (git-ignored) |
 
 ---
 
-## 4. Headless Linux Server & Authentication
+## 3. Dynamic Algorithmic Mix Archiving
 
-### Step 1: Initial Interactive Login
-On headless servers (no browser display), run:
-```bash
-uv run tidal-cli auth login
-```
-The CLI displays an authorization prompt:
-```text
-To authorize TIDAL CLI, visit:
-https://link.tidal.com/XXXXX
+### Zero-Assumption Mix Discovery
+Tidal and other streaming providers dynamically generate daily mixes depending on listening history. Accounts may have anywhere from 1 to 15 mixes.
+`MixService` queries mixes without hardcoded count assumptions:
+- Matches `My Daily Discovery` by mix type (`DISCOVERY_MIX`) or keyword.
+- Identifies all `Daily Mix N` instances, naturally sorting numbers (`Daily Mix 2` before `Daily Mix 10`).
+- Discards non-audio mixes (e.g. video mixes).
 
-Code: ABCD (expires in 300s)
-Waiting for authorization in your browser or phone...
-```
-Visit the link on any browser or mobile device connected to your Tidal account. Once authorized, the CLI detects completion and stores the credentials.
-
-### Step 2: Credential Security
-Session credentials are saved to:
-```text
-~/.config/tidal-cli/session.json
-```
-On Linux/macOS, the client automatically enforces strict POSIX permissions:
-- Directory: `0700` (`rwx------`)
-- Session file: `0600` (`rw-------`)
-
-### Step 3: Unattended Silent Token Refresh
-When Tidal access tokens expire (typically after 7 days), the CLI detects the expiration during `cron` execution and automatically uses the stored `refresh_token` to request a new access token from Tidal. The updated token is written back to `session.json`, ensuring the cron job never halts due to expired credentials.
+### Daily Megamix & Deduplication Pipeline
+1. **Harvesting**: Gathers all tracks from `My Daily Discovery` and all `Daily Mixes`.
+2. **Dual-Layer Deduplication**:
+   - Track ID check: Filters exact duplicate objects.
+   - ISRC check: Filters identical sound recordings across different albums or remasters.
+3. **Fisher-Yates Shuffle**: Randomizes track order.
+4. **Chunked Addition**: Ingests tracks in batches of 50 to prevent request timeouts.
+5. **Modes**:
+   - `replace` (default): Clears the Megamix and injects fresh tracks.
+   - `append`: Appends new tracks without duplicates.
 
 ---
 
-## 5. Automated Linux Cron Setup
+## 4. Playlist Versioning & Historical Recovery
 
-### Default Workflow Definition (`~/.config/tidal-cli/jobs.yaml`)
-When first executed, `tidal-cli` creates `jobs.yaml`:
-```yaml
-jobs:
-  daily-discovery-megamix:
-    description: "Backup all daily mixes and build a randomized daily megamix"
-    actions:
-      - action: backup_daily_discovery
-        params:
-          playlist_name_format: "Discovery Backup - {date}"
-          description: "Automated daily backup of Tidal Daily Discovery"
-      - action: create_megamix
-        params:
-          target_playlist: "Daily Megamix"
-          include_discovery: true
-          include_daily_mixes: true
-          shuffle: true
-          mode: "replace"
-          description: "All daily mix tunes in random order - updated on {date}"
+### SHA-256 Versioned Snapshots
+Running `curo playlist snapshot` executes incremental versioning:
+1. Fetches playlist tracks and calculates a canonical content hash over `id`, `isrc`, and `duration_seconds`.
+2. Reads the playlist's local `manifest.json`.
+3. If the hash matches the last snapshot, no file is written (`status: unchanged`).
+4. If modified, a new version file `YYYY-MM-DD_<version>.json` is saved, computing exact additions, removals, and reorderings.
 
-  daily-playlist-backup:
-    description: "Daily versioned snapshot of all personal playlists with availability alerts"
-    actions:
-      - action: snapshot_all_playlists
-        params:
-          alert_on_unavailable: true
-```
-
-### Inspect Available Jobs
-```bash
-uv run tidal-cli job list
-```
-
-### Ready-to-Copy Crontab Helper
-Run:
-```bash
-uv run tidal-cli job cron-help
-```
-Output:
-```cron
-# Run Tidal Daily Discovery Backup & Megamix daily at 06:00 UTC
-0 6 * * * /path/to/.venv/bin/python -m tidal_cli.cli job run daily-discovery-megamix --quiet >> ~/.config/tidal-cli/cron.log 2>&1
-
-# Run Daily Personal Playlist Versioned Backup & Availability Check daily at 05:00 UTC
-0 5 * * * /path/to/.venv/bin/python -m tidal_cli.cli job run daily-playlist-backup --quiet >> ~/.config/tidal-cli/cron.log 2>&1
-```
-
-To install:
-```bash
-crontab -e
-```
-Paste the line above, save, and exit.
+### Historical Track Metadata Registry (`track_registry.json`)
+When streaming services delist or retire a track, its metadata (such as ISRC or album UPC) is often erased from active API responses.
+`SnapshotService` automatically registers every healthy track encountered into `track_registry.json`. When a track becomes delisted:
+- `CandidateFinder` queries `track_registry.json` using the retired track's ID.
+- Recovers the original ISRC, Album UPC, and release date.
+- Queries the streaming provider by ISRC to locate an active reissue or replacement with high confidence.
 
 ---
 
-## 6. Complete CLI Command Reference
+## 5. Intelligent Playlist Repair & Scoring Engine
+
+`PlaylistRepairService` identifies unavailable tracks (`available: false` or `allow_streaming: false`) and scores potential replacements using a 100-point explainable algorithm:
+
+| Factor | Points | Evaluation Details |
+| :--- | :--- | :--- |
+| **ISRC Match** | +30 | Exact sound recording match (authoritative cross-album identifier). |
+| **Album UPC** | +15 | Exact album barcode match (tracks from the exact same physical/digital release). |
+| **Title Match** | +30 | Normalized string similarity (strips remaster dates, version tags, audio markers). |
+| **Artist Match** | +25 | Exact primary artist ID (+25) or contributing artist ID match (+22 to +24). |
+| **Duration Delta** | +15 | Exact duration (+15), scaling down to 0 at $\ge 15$ seconds difference. |
+| **Release Year** | +5 | Exact date (+5), same release year (+3). |
+| **Live Penalty** | -40 | Penalty if candidate is "Live" while original was studio (requires manual approval). |
+| **Acoustic Penalty** | -35 | Penalty if candidate is "Acoustic" while original was standard (requires manual approval). |
+
+### Replacement Safety Safeguards
+- **100% Threshold Default**: Default CLI runs require an exact match ($\ge 0.80$ with `--threshold 0.8`).
+- **Dry-Run by Default**: Generates diagnostic reports in `./reports/repair_<slug>_<date>.json` without modifying streaming playlists. Pass `--live` to mutate playlists.
+- **Atomic Two-Step Swap**: When replacing a track live:
+  1. Calls `provider.add_tracks_to_playlist(pl_id, [new_id], position=idx)`.
+  2. If and only if the provider confirms addition, calls `provider.remove_track_from_playlist_by_index(pl_id, idx + 1)`.
+  3. If addition fails or is skipped by the platform, the original track is **never** removed.
+
+---
+
+## 6. Email Notifications & Change Digests
+
+Musicae Curo includes a built-in notification engine (`curo notify`) for headless server alerts:
+
+- **Daily Change Digest**: Dispatched when playlists are modified or delisted tracks are discovered. Includes itemized track additions, removals, and availability warnings.
+- **All Playlists Baseline Overview**: Dispatched on first run or on demand (`curo notify send --all`). Provides an executive summary of all personal playlists, track counts, and availability health.
+- **Supported SMTP Configurations**:
+  - Direct TLS / SSL (Port 465).
+  - STARTTLS (Port 587 or Port 25 for internal mail relays).
+  - Unauthenticated local SMTP relays or authenticated remote servers.
+
+---
+
+## 7. CLI Command Reference
 
 ### Global Options
-| Flag | Description |
-| :--- | :--- |
-| `-c, --config PATH` | Custom config directory path (default: `~/.config/tidal-cli`). |
-| `-q, --quiet` | Suppress decorative banners and progress output (recommended for cron). |
-| `--json` | Output machine-readable JSON for scripting. |
-| `-v, --verbose` | Enable debug logging. |
+- `-c, --config <path>`: Custom configuration directory (default: `~/.config/curo`).
+- `-p, --provider <name>`: Target streaming provider (e.g. `tidal`, `deezer`, `spotify`).
+- `-q, --quiet`: Suppress banners and progress bars (ideal for cron).
+- `--json`: Output machine-readable JSON.
+- `-v, --verbose`: Enable debug logging.
 
----
-
-### `auth` Subcommands
+### Authentication (`curo auth`)
 ```bash
-# Authorize device with Tidal
-tidal-cli auth login
-
-# Check active session, profile name, and expiration
-tidal-cli auth status
-
-# Disconnect and wipe local credentials
-tidal-cli auth logout
+curo auth login [-p tidal]      # Interactive OAuth device flow
+curo auth status [-p tidal]     # Check authentication status
+curo auth logout [-p tidal]     # Clear saved credentials
 ```
 
----
-
-### `playlist` Subcommands
+### Providers (`curo provider`)
 ```bash
-# List all user playlists (with track counts, duration, and privacy status)
-tidal-cli playlist list
-
-# Show tracks in a playlist by ID or name
-tidal-cli playlist show "Daily Megamix"
-tidal-cli playlist show "d6b5e00b-..."
-
-# Create a new playlist
-tidal-cli playlist create "Weekend Grooves" --desc "Hand-picked tracks" --public
-
-# Export playlist with full container & track metadata to JSON, M3U8, or CSV
-tidal-cli playlist export "Daily Megamix" --format json --output ~/megamix.json
-tidal-cli playlist export "Daily Megamix" --format m3u8 --output ~/megamix.m3u8
-tidal-cli playlist export "Daily Megamix" --format csv --output ~/megamix.csv
-
-# Detect unavailable tracks and evaluate replacement candidates (default: 80% threshold & dry-run)
-tidal-cli playlist repair "My Heavy Rotation"
-
-# Apply replacements live on Tidal (threshold defaults to 80%)
-tidal-cli playlist repair "My Heavy Rotation" --live
-
-# Target a specific track in repair analysis or provide manual replacement override
-tidal-cli playlist repair "My Heavy Rotation" --track 1439552 --with 29505086 --live
-
-# Replace a track directly by track ID or playlist position (#index)
-# Dry-run simulation (verifies metadata similarity, duration, and score)
-tidal-cli playlist replace "My Heavy Rotation" --track 1439552 --with 29505086
-
-# Live manual replacement using track ID, ISRC, or album UPC
-tidal-cli playlist replace "My Heavy Rotation" --track "#4" --with GBCEE0700017 --live
-tidal-cli playlist replace "My Heavy Rotation" --track "#4" --upc 0077774620258 --live
-
-# Run repair analysis and export report to a custom JSON location
-tidal-cli playlist repair "My Heavy Rotation" --export reports/custom_repair.json
-
-# Check all tracks (including playable ones) for newer reissues or remasters
-tidal-cli playlist repair "My Heavy Rotation" --all-tracks
-
-# Snapshot all personal user playlists (versioned by SHA-256 content hash)
-tidal-cli playlist snapshot
-
-# Snapshot a specific playlist by ID or name
-tidal-cli playlist snapshot "My Heavy Rotation"
-
-# View recent track availability alerts logged when tracks become unavailable
-tidal-cli playlist alerts
-tidal-cli playlist alerts --limit 100
+curo provider list              # List all registered providers and active status
+curo provider default <name>    # Set default provider (e.g. tidal)
 ```
 
-#### Daily Snapshots, Version History & Track Registry
-To protect against catalog turnover, `tidal-cli` provides automated versioned playlist backups and an availability monitoring pipeline:
-- **Change Detection via SHA-256**: Only creates a new snapshot file (`~/.config/tidal-cli/snapshots/<playlist_slug>/<hash>.json`) when track ordering or IDs actually change.
-- **Playlist Manifest (`manifest.json`)**: Tracks complete revision history with timestamp, version number, track count, and content hash.
-- **Historical Track Registry (`snapshots/index.json`)**: Continuously records healthy, playable tracks with their last-known `isrc`, `album_upc`, and `album_release_date`. When a track later becomes unavailable and Tidal zeroes out its identifiers, `playlist repair` queries this registry to recover the sound recording code and achieves **90%–100% repair accuracy**.
-- **Delisted Track Alerts (`availability_alerts.log`)**: Appends structured JSON alert events whenever a track is detected as unavailable, making catalog regressions immediately observable.
-
-#### Similarity Scoring Calibration
-Because Tidal strips the `isrc` and album `upc` fields when de-listing tracks, the scoring formula is calibrated so that an exact metadata match achieves **80% (0.80)**:
-- **Title Match (30 pts)**: Normalized title comparison (automatically cleans remaster notes like `(2011 Remaster)`, `(Remastered 2011)`, `- 2011 Remaster`).
-- **Artist Match (25 pts)**: Primary artist ID, collaborating/contributing artist overlap (handles inverted credits on duets), or normalized name comparison.
-- **Duration Match (15 pts)**: Exact runtime within 1s.
-- **Album Name Match (10 pts)**: Normalized release title comparison.
-- **Single-to-Album Matching (+8 pts)**: If the original was a self-titled single track (`album == title`), rewards full studio album versions.
-- **Album Release Date Bonus (+5 pts exact date, +2 pts same year)**: Matches release date from album metadata.
-- **ISRC Bonus (+10 pts)**: Verified exact sound recording code match (boosts score to 90%–100% when present or recovered from snapshot history).
-- **Album UPC Bonus (+10 pts)**: Verified identical album release barcode.
-- **Version Mismatches**: Severe penalties (capping score $\le 40\%$) for Live, Acoustic, Instrumental, or Remix cuts substituting studio tracks, requiring manual approval.
-
----
-
-### `album` Subcommands
+### Playlists (`curo playlist`)
 ```bash
-# Show album details and track list by Album ID or title
-tidal-cli album show "Abbey Road"
-tidal-cli album show "123456"
-
-# Export album with full container & track metadata to JSON
-tidal-cli album export "Abbey Road" --format json --output ~/abbey_road.json
-
-# Export album to M3U8 or CSV
-tidal-cli album export 123456 --format m3u8 --output ~/album.m3u8
-tidal-cli album export 123456 --format csv --output ~/album.csv
+curo playlist list
+curo playlist show <id|title>
+curo playlist create <title> [--description <desc>] [--public]
+curo playlist export <id> [--format json|m3u8|csv] [--output <path>]
+curo playlist snapshot [id] [--no-alert] [--notify] [--all-mail]
+curo playlist alerts [--limit 50]
+curo playlist repair <id> [--threshold 0.8] [--live]
+curo playlist replace <id> --track <id|#pos> --with <id|isrc|upc> [--live]
 ```
 
-#### Exported JSON Metadata Structure
-When exporting a playlist or album to `json`, the output includes all high-level container fields and comprehensive metadata for every included track:
-
-```json
-{
-  "type": "album", // or "playlist"
-  "id": 123456,
-  "name": "Album Title",
-  "version": "Remastered",
-  "duration_seconds": 2600,
-  "num_tracks": 14,
-  "release_date": "1975-11-21",
-  "upc": "00602527718021",
-  "audio_quality": "HI_RES_LOSSLESS",
-  "audio_modes": ["STEREO", "DOLBY_ATMOS"],
-  "artist": { "id": 1001, "name": "Artist Name" },
-  "artists": [{ "id": 1001, "name": "Artist Name", "type": "MAIN" }],
-  "listen_url": "https://tidal.com/browse/album/123456",
-  "tracks": [
-    {
-      "id": 555666,
-      "name": "Track Name",
-      "full_name": "Track Name (2011 Remaster)",
-      "duration_seconds": 354,
-      "track_number": 1,
-      "volume_number": 1,
-      "isrc": "GBUM71029604",
-      "explicit": false,
-      "popularity": 95,
-      "audio_quality": "LOSSLESS",
-      "audio_modes": ["STEREO"],
-      "is_lossless": true,
-      "is_hi_res_lossless": false,
-      "is_dolby_atmos": false,
-      "bpm": 72,
-      "key": "Bb",
-      "replay_gain": -9.2,
-      "peak": 0.99,
-      "copyright": "(C) 2011 Record Label",
-      "artist": { "id": 1001, "name": "Artist Name" },
-      "album": { "id": 123456, "name": "Album Title", "release_date": "1975-11-21" },
-      "listen_url": "https://tidal.com/browse/track/555666"
-    }
-  ]
-}
-```
-
----
-
-### `mix` Subcommands
+### Albums (`curo album`)
 ```bash
-# List all dynamically discovered Daily Mixes (regardless of account mix count)
-tidal-cli mix list
-
-# Manually trigger today's Daily Discovery backup
-tidal-cli mix daily-backup
-
-# Manually generate/update the randomized Megamix
-tidal-cli mix megamix --target "Daily Megamix" --shuffle --mode replace
-
-# Generate Megamix with a track limit (e.g., top 100 random tracks)
-tidal-cli mix megamix --target "Daily 100" --limit 100
+curo album show <id>
+curo album export <id> [--format json|m3u8|csv] [--output <path>]
 ```
 
----
-
-### `job` Subcommands (Cron Entrypoints)
+### Mixes (`curo mix`)
 ```bash
-# List configured automation jobs from jobs.yaml
-tidal-cli job list
-
-# Run a job headlessly
-tidal-cli job run daily-discovery-megamix
-
-# Run silently in cron with JSON error reporting
-tidal-cli --json --quiet job run daily-discovery-megamix
-
-# Display recommended crontab entry for server setup
-tidal-cli job cron-help
+curo mix list
+curo mix backup-discovery [--playlist-name "Custom Name"]
+curo mix megamix [--mode replace|append] [--limit 100]
 ```
 
----
-
-### `notify` Subcommands (Email Notifications)
+### Automated Jobs (`curo job`)
 ```bash
-# Check current email notification status and delivery history
-tidal-cli notify status
-
-# Configure SMTP parameters in ~/.config/tidal-cli/config.json (e.g. port 25 with STARTTLS)
-tidal-cli notify config --host mail.myserver.org --port 25 --tls --user myuser --password mypass --to-addr listener@example.com --from-addr tidal-bot@example.com
-
-# Send a test email to verify credentials and SMTP connectivity
-tidal-cli notify test
-
-# Manually trigger a notification (sends Changes Digest if changes/alerts exist)
-tidal-cli notify send
-
-# Manually trigger full All Playlists Baseline Overview email
-tidal-cli notify send --all
+curo job list                   # List defined jobs in jobs.yaml
+curo job run <job_name>         # Execute a job headless
+curo job cron-help              # Generate Linux crontab syntax
 ```
 
-#### Email Notification Behavior & Templates
-When email settings (`smtp_host` and `to_address`) are configured in `~/.config/tidal-cli/config.json` or via environment variables (`TIDAL_SMTP_*`), `tidal-cli` automatically sends HTML + plain-text email reports:
-1. **Very First Email Sent**: Dispatches the **All Playlists Baseline Overview** template, providing a complete inventory of all personal playlists, track counts, version numbers, and an initial delisted tracks audit.
-2. **Subsequent Daily Cron Runs (`daily-playlist-backup`)**: Compares SHA-256 track sequence hashes. If one or more playlists were modified, or if new unavailable track alerts occurred, dispatches the **Playlist Changes Digest**:
-   - Shows added tracks (`+N`) and removed tracks (`-M`) for each changed playlist.
-   - Shows version transitions (`v1 -> v2`).
-   - Highlights any unavailable tracks detected with historical recovery status.
-   - If nothing changed and no alerts fired, no email is sent to avoid inbox clutter.
-3. **Manual Triggering**: Run `tidal-cli notify send --all` at any time to receive the full catalog baseline overview.
-
----
-
-## 7. Extending Automations
-
-To add new automated routines, simply define additional jobs in `~/.config/tidal-cli/jobs.yaml`:
-```yaml
-jobs:
-  weekly-archive:
-    description: "Export full backup of all playlists every Sunday"
-    actions:
-      - action: export_playlist
-        params:
-          playlist: "Daily Megamix"
-          format: "m3u8"
+### Notifications (`curo notify`)
+```bash
+curo notify config --host <smtp> --port <port> [--tls/--ssl] --user <user> --password <pass> --to-addr <email>
+curo notify test                # Verify SMTP delivery
+curo notify send [--all]        # Dispatch notification manually
 ```
-And add a corresponding schedule in your Linux crontab:
-```cron
-0 2 * * 0 /path/to/.venv/bin/python -m tidal_cli.cli job run weekly-archive --quiet
-```
-
-

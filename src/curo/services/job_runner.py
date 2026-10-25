@@ -8,13 +8,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 import yaml
 
-from tidal_cli.auth import SessionManager
-from tidal_cli.config import ConfigManager, config_manager
-from tidal_cli.services.mix_service import MixService
-from tidal_cli.services.playlist_service import PlaylistService
-from tidal_cli.services.snapshot_service import SnapshotService
+from curo.config import ConfigManager, config_manager
+from curo.core.provider import MusicProvider
+from curo.core.registry import ProviderRegistry
+from curo.services.mix_service import MixService
+from curo.services.playlist_service import PlaylistService
+from curo.services.snapshot_service import SnapshotService
 
-logger = logging.getLogger("tidal_cli.job_runner")
+logger = logging.getLogger(__name__)
 
 
 class JobExecutionError(Exception):
@@ -25,9 +26,21 @@ class JobExecutionError(Exception):
 class JobRunner:
     """Executes scheduled jobs from jobs.yaml."""
 
-    def __init__(self, cfg: Optional[ConfigManager] = None) -> None:
+    def __init__(
+        self,
+        provider: Optional[MusicProvider] = None,
+        cfg: Optional[ConfigManager] = None,
+    ) -> None:
         self.config = cfg or config_manager
-        self.session_manager = SessionManager(self.config)
+        self._provider = provider
+
+    @property
+    def provider(self) -> MusicProvider:
+        """Resolve active provider lazily."""
+        if self._provider is None:
+            provider_name = self.config.get_default_provider()
+            self._provider = ProviderRegistry.create_provider(provider_name, cfg=self.config)
+        return self._provider
 
     def load_jobs_definition(self) -> Dict[str, Any]:
         """Load jobs from jobs.yaml, creating default if not found."""
@@ -59,11 +72,9 @@ class JobRunner:
             logger.warning(f"Job '{job_name}' has no actions configured.")
             return {"job": job_name, "success": True, "actions_executed": 0}
 
-        # Ensure session is active and valid (silent refresh if expired)
-        session = self.session_manager.load_session(auto_refresh=True)
-        playlist_service = PlaylistService(session)
-        mix_service = MixService(session)
-        snapshot_service = SnapshotService(session, cfg=self.config)
+        playlist_service = PlaylistService(self.provider)
+        mix_service = MixService(self.provider)
+        snapshot_service = SnapshotService(self.provider, cfg=self.config)
 
         action_results: List[Dict[str, Any]] = []
 
@@ -77,7 +88,7 @@ class JobRunner:
                 if action_type == "backup_daily_discovery":
                     res = mix_service.backup_daily_discovery(
                         playlist_name_format=params.get("playlist_name_format", "Discovery Backup - {date}"),
-                        description=params.get("description", "Automated daily backup of Tidal Daily Discovery"),
+                        description=params.get("description", f"Automated daily backup of {self.provider.display_name} Daily Discovery"),
                     )
                 elif action_type == "create_megamix":
                     res = mix_service.create_megamix(
@@ -117,6 +128,7 @@ class JobRunner:
 
         return {
             "job": job_name,
+            "provider": self.provider.name,
             "success": True,
             "actions_executed": len(action_results),
             "results": action_results,
@@ -124,10 +136,9 @@ class JobRunner:
 
     def generate_cron_help(self, job_name: str = "daily-discovery-megamix") -> str:
         """Generate ready-to-copy crontab lines."""
-        # Find path to python executable or tidal-cli entrypoint
         py_exec = sys.executable
         return (
-            f"# Run Tidal Daily Discovery Backup & Megamix daily at 06:00 UTC\n"
-            f"0 6 * * * {py_exec} -m tidal_cli.cli job run {job_name} --quiet >> ~/.config/tidal-cli/cron.log 2>&1\n"
+            f"# Run Musicae Curo job '{job_name}' daily at 06:00 UTC\n"
+            f"0 6 * * * {py_exec} -m curo.cli job run {job_name} --quiet >> ~/.config/curo/cron.log 2>&1\n"
         )
 

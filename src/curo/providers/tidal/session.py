@@ -1,4 +1,4 @@
-"""Authentication and session management for tidal-cli."""
+"""Tidal session and OAuth authentication manager."""
 
 from __future__ import annotations
 
@@ -6,48 +6,44 @@ import datetime
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import tidalapi
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Confirm
 
-from tidal_cli.config import ConfigManager, config_manager
+from curo.config import ConfigManager, config_manager
 
 logger = logging.getLogger(__name__)
 console = Console()
 
 
-class AuthenticationError(Exception):
-    """Raised when authentication fails or credentials are required."""
+class TidalAuthenticationError(Exception):
+    """Raised when Tidal authentication fails or credentials are required."""
     pass
 
 
-class SessionManager:
-    """Handles OAuth2 login, persistence, and automated headless token refresh."""
+class TidalSessionManager:
+    """Handles OAuth2 login, persistence, and automated headless token refresh for Tidal."""
 
     def __init__(self, cfg: Optional[ConfigManager] = None) -> None:
         self.config = cfg or config_manager
+        self.session_file = self.config.get_provider_session_file("tidal")
 
     def load_session(self, auto_refresh: bool = True) -> tidalapi.Session:
-        """Load an existing session from session.json, refreshing token if expired.
-
-        Raises AuthenticationError if no valid session exists.
-        """
-        session_file = self.config.session_file
-        if not session_file.exists():
-            raise AuthenticationError(
-                f"No session file found at {session_file}. "
-                "Please run 'tidal-cli auth login' first."
+        """Load an existing session from session file, refreshing token if expired."""
+        if not self.session_file.exists():
+            raise TidalAuthenticationError(
+                f"No session file found at {self.session_file}. "
+                "Please run 'curo auth login -p tidal' first."
             )
 
         session = tidalapi.Session()
         try:
-            with open(session_file, "r", encoding="utf-8") as f:
+            with open(self.session_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
         except Exception as e:
-            raise AuthenticationError(f"Failed to read session file {session_file}: {e}")
+            raise TidalAuthenticationError(f"Failed to read session file {self.session_file}: {e}")
 
         token_type = data.get("token_type", {}).get("data")
         access_token = data.get("access_token", {}).get("data")
@@ -55,9 +51,8 @@ class SessionManager:
         is_pkce = data.get("is_pkce", {}).get("data", False)
 
         if not access_token:
-            raise AuthenticationError("Session file is corrupt: missing access token.")
+            raise TidalAuthenticationError("Session file is corrupt: missing access token.")
 
-        # Attempt to load session with current access token
         loaded = session.load_oauth_session(
             token_type=token_type,
             access_token=access_token,
@@ -65,7 +60,6 @@ class SessionManager:
             is_pkce=is_pkce,
         )
 
-        # Check if the session is alive
         if loaded:
             try:
                 if session.check_login():
@@ -73,13 +67,11 @@ class SessionManager:
             except Exception:
                 pass
 
-        # If not alive and auto_refresh enabled, attempt refresh using refresh_token
         if auto_refresh and refresh_token:
             logger.info("Access token expired or session invalid. Attempting silent token refresh...")
             try:
                 refreshed = session.token_refresh(refresh_token)
                 if refreshed:
-                    # Re-initialize session with refreshed access token
                     if session.load_oauth_session(
                         token_type=session.token_type,
                         access_token=session.access_token,
@@ -92,16 +84,14 @@ class SessionManager:
             except Exception as e:
                 logger.warning(f"Silent token refresh failed: {e}")
 
-        raise AuthenticationError(
+        raise TidalAuthenticationError(
             "Tidal session has expired and could not be automatically refreshed. "
-            "Please run 'tidal-cli auth login' to re-authenticate."
+            "Please run 'curo auth login -p tidal' to re-authenticate."
         )
 
     def save_session(self, session: tidalapi.Session) -> None:
-        """Save active session to session.json with strict 0600 file permissions."""
+        """Save active session to session file with strict 0600 file permissions."""
         self.config.ensure_config_dir()
-        session_file = self.config.session_file
-
         data = {
             "token_type": {"data": session.token_type},
             "session_id": {"data": session.session_id},
@@ -112,10 +102,10 @@ class SessionManager:
             "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         }
 
-        with open(session_file, "w", encoding="utf-8") as f:
+        with open(self.session_file, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
 
-        self.config.secure_file(session_file)
+        self.config.secure_file(self.session_file)
 
     def login_interactive(self) -> tidalapi.Session:
         """Run interactive OAuth2 Device Authorization flow."""
@@ -127,18 +117,17 @@ class SessionManager:
         user_code = getattr(login, "user_code", "N/A")
 
         msg = (
-            f"[bold green]To authorize TIDAL CLI, visit:[/bold green]\n"
+            f"[bold green]To authorize Tidal with Musicae Curo, visit:[/bold green]\n"
             f"[link={verification_url}]{verification_url}[/link]\n\n"
             f"Code: [bold cyan]{user_code}[/bold cyan] (expires in {login.expires_in}s)\n\n"
             f"[dim]Waiting for authorization in your browser or phone...[/dim]"
         )
-        console.print(Panel(msg, title="[bold]TIDAL Device Login[/bold]", border_style="cyan"))
+        console.print(Panel(msg, title="[bold]Tidal Device Login[/bold]", border_style="cyan"))
 
-        # Wait for the user to complete login in browser
         future.result()
 
         if not session.check_login():
-            raise AuthenticationError("Authorization timed out or was rejected.")
+            raise TidalAuthenticationError("Authorization timed out or was rejected.")
 
         self.save_session(session)
 
@@ -149,20 +138,18 @@ class SessionManager:
         return session
 
     def logout(self) -> bool:
-        """Remove stored session."""
-        session_file = self.config.session_file
-        if session_file.exists():
-            session_file.unlink()
+        """Remove stored session file."""
+        if self.session_file.exists():
+            self.session_file.unlink()
             return True
         return False
 
     def get_status(self) -> Dict[str, Any]:
         """Check session status without raising exceptions."""
-        session_file = self.config.session_file
-        if not session_file.exists():
+        if not self.session_file.exists():
             return {
                 "logged_in": False,
-                "session_file": str(session_file),
+                "session_file": str(self.session_file),
                 "error": "No session file found",
             }
 
@@ -178,11 +165,12 @@ class SessionManager:
                 "user_id": u.id,
                 "user_name": name,
                 "country_code": session.country_code,
-                "session_file": str(session_file),
+                "session_file": str(self.session_file),
             }
         except Exception as e:
             return {
                 "logged_in": False,
-                "session_file": str(session_file),
+                "session_file": str(self.session_file),
                 "error": str(e),
             }
+

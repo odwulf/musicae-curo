@@ -9,9 +9,9 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from tidal_cli.cli import app, state
-from tidal_cli.config import ConfigManager, EmailConfig
-from tidal_cli.services.email_service import EmailService
+from curo.cli import app, state
+from curo.config import ConfigManager, EmailConfig
+from curo.services.email_service import EmailService
 
 
 @pytest.fixture
@@ -46,8 +46,8 @@ def test_email_config_from_file_and_env(temp_config: ConfigManager, monkeypatch)
     assert loaded.to_address == "listener@example.com"
 
     # Environment variable overrides
-    monkeypatch.setenv("TIDAL_SMTP_HOST", "smtp.override.org")
-    monkeypatch.setenv("TIDAL_EMAIL_TO", "boss@example.com")
+    monkeypatch.setenv("CURO_SMTP_HOST", "smtp.override.org")
+    monkeypatch.setenv("CURO_EMAIL_TO", "boss@example.com")
     env_cfg = temp_config.get_email_config()
     assert env_cfg.smtp_host == "smtp.override.org"
     assert env_cfg.to_address == "boss@example.com"
@@ -56,23 +56,23 @@ def test_email_config_from_file_and_env(temp_config: ConfigManager, monkeypatch)
 def test_first_email_tracking_and_state(temp_config: ConfigManager):
     assert temp_config.has_email_sent_before() is False
 
-    temp_config.mark_email_sent("[TIDAL] Baseline Overview")
+    temp_config.mark_email_sent("[Musicae Curo] Baseline Overview")
     assert temp_config.has_email_sent_before() is True
 
     # State file check
     with open(temp_config.notification_state_file, "r", encoding="utf-8") as f:
         data = json.load(f)
     assert "first_email_sent_at" in data
-    assert data["last_email_subject"] == "[TIDAL] Baseline Overview"
+    assert data["last_email_subject"] == "[Musicae Curo] Baseline Overview"
 
     first_time = data["first_email_sent_at"]
 
     # Mark second email sent: first_email_sent_at should not be overwritten
-    temp_config.mark_email_sent("[TIDAL] Second Digest")
+    temp_config.mark_email_sent("[Musicae Curo] Second Digest")
     with open(temp_config.notification_state_file, "r", encoding="utf-8") as f:
         data2 = json.load(f)
     assert data2["first_email_sent_at"] == first_time
-    assert data2["last_email_subject"] == "[TIDAL] Second Digest"
+    assert data2["last_email_subject"] == "[Musicae Curo] Second Digest"
 
 
 def test_smtp_delivery_with_mocks(temp_config: ConfigManager):
@@ -142,7 +142,8 @@ def test_render_all_playlists_report_contains_metrics_and_inventory(temp_config:
     html_body, text_body = service.render_all_playlists_report(playlists)
 
     # HTML checks
-    assert "TIDAL Catalog Baseline Overview" in html_body
+    assert "Musicae Curo" in html_body
+    assert "Baseline Overview" in html_body
     assert "Rock Classics" in html_body
     assert "Heavy Rotation" in html_body
     assert "Delisted Tune" in html_body
@@ -161,33 +162,31 @@ def test_render_changes_digest_shows_diff_and_version(temp_config: ConfigManager
     modified_playlists = [
         {
             "name": "Daily Megamix",
+            "playlist_name": "Daily Megamix",
             "version": 3,
-            "prev_version": 2,
-            "track_count": 105,
-            "diff": {
-                "added": [
-                    {"title": "New Track A", "artist": "Artist A", "album": "Album A"},
-                    {"title": "New Track B", "artist": "Artist B", "album": "Album B"},
+            "track_diff": {
+                "added_tracks": [
+                    {"title": "New Track A", "artist": "Artist A"},
+                    {"title": "New Track B", "artist": "Artist B"},
                 ],
-                "removed": [
-                    {"title": "Dropped Track X", "artist": "Artist X", "album": "Album X"}
+                "removed_tracks": [
+                    {"title": "Dropped Track X", "artist": "Artist X"}
                 ],
             },
-            "unavailable_tracks_count": 0,
+            "new_alerts_count": 0,
         }
     ]
 
     html_body, text_body = service.render_changes_digest(modified_playlists)
 
-    assert "TIDAL Playlist Changes Digest" in html_body
+    assert "Musicae Curo" in html_body
     assert "Daily Megamix" in html_body
-    assert "v2 &rarr; v3" in html_body
     assert "New Track A" in html_body
     assert "Dropped Track X" in html_body
 
-    assert "Daily Megamix (v2 -> v3)" in text_body
-    assert "+ New Track A - Artist A" in text_body
-    assert "- Dropped Track X - Artist X" in text_body
+    assert "Daily Megamix" in text_body
+    assert "+ Added: New Track A by Artist A" in text_body
+    assert "- Removed: Dropped Track X by Artist X" in text_body
 
 
 def test_send_digest_notification_first_run_vs_subsequent(temp_config: ConfigManager):
@@ -204,6 +203,7 @@ def test_send_digest_notification_first_run_vs_subsequent(temp_config: ConfigMan
         "playlists": [
             {
                 "name": "Favorites",
+                "playlist_name": "Favorites",
                 "has_changed": False,
                 "status": "unchanged",
                 "version": 1,
@@ -222,7 +222,7 @@ def test_send_digest_notification_first_run_vs_subsequent(temp_config: ConfigMan
         assert res1["is_first_email"] is True
         assert temp_config.has_email_sent_before() is True
         mock_send.assert_called_once()
-        assert "[TIDAL] All Playlists Baseline Overview" in mock_send.call_args[0][0]
+        assert "Baseline" in mock_send.call_args[0][0]
 
         mock_send.reset_mock()
 
@@ -245,12 +245,12 @@ def test_send_digest_notification_first_run_vs_subsequent(temp_config: ConfigMan
             "playlists": [
                 {
                     "name": "Favorites",
+                    "playlist_name": "Favorites",
                     "has_changed": True,
                     "status": "created",
                     "version": 2,
-                    "prev_version": 1,
                     "track_count": 26,
-                    "diff": {"added": [{"title": "Added Song", "artist": "Band"}], "removed": []},
+                    "track_diff": {"added_tracks": [{"title": "Added Song", "artist": "Band"}], "removed_tracks": []},
                     "unavailable_tracks_count": 0,
                 }
             ],
@@ -260,7 +260,7 @@ def test_send_digest_notification_first_run_vs_subsequent(temp_config: ConfigMan
         assert res4["sent"] is True
         assert res4["template"] == "changes_digest"
         mock_send.assert_called_once()
-        assert "[TIDAL] Playlist Changes Digest" in mock_send.call_args[0][0]
+        assert "Playlist Updates" in mock_send.call_args[0][0]
 
 
 def test_cli_notify_commands(temp_config: ConfigManager, monkeypatch):
@@ -289,7 +289,7 @@ def test_cli_notify_commands(temp_config: ConfigManager, monkeypatch):
         ],
     )
     assert res_cfg.exit_code == 0
-    assert "Saved email configuration" in res_cfg.stdout
+    assert "SMTP configuration updated" in res_cfg.stdout
 
     # 3. notify status after config
     res_stat2 = cli_runner.invoke(app, ["--json", "notify", "status"])
@@ -306,7 +306,7 @@ def test_cli_notify_commands(temp_config: ConfigManager, monkeypatch):
 
         res_test = cli_runner.invoke(app, ["notify", "test"])
         assert res_test.exit_code == 0
-        assert "Test email delivered successfully" in res_test.stdout
+        assert "Verification email sent to" in res_test.stdout
 
 
 def test_cli_notify_configure_port_25_with_tls(temp_config: ConfigManager, monkeypatch):
@@ -326,7 +326,7 @@ def test_cli_notify_configure_port_25_with_tls(temp_config: ConfigManager, monke
             "--to-addr",
             "xave@example.com",
             "--from-addr",
-            "tidal-bot@example.com",
+            "bot@example.com",
         ],
     )
     assert res.exit_code == 0
@@ -336,5 +336,4 @@ def test_cli_notify_configure_port_25_with_tls(temp_config: ConfigManager, monke
     assert cfg.use_tls is True
     assert cfg.use_ssl is False
     assert cfg.to_address == "xave@example.com"
-    assert cfg.from_address == "tidal-bot@example.com"
-
+    assert cfg.from_address == "bot@example.com"

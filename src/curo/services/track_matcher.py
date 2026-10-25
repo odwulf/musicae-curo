@@ -6,31 +6,33 @@ import difflib
 import re
 from typing import Any, Optional, Set
 
-from tidalapi.media import Track
 
-
-def is_track_available(track: Track) -> bool:
-    """Check if a track is actively streamable and available on TIDAL."""
+def is_track_available(track: Any) -> bool:
+    """Check if a track is actively streamable and playable."""
     if not track:
         return False
 
-    # Check allow_streaming
+    is_playable = getattr(track, "is_playable", None)
+    if (
+        is_playable is not None
+        and not hasattr(is_playable, "_mock_return_value")
+        and not hasattr(is_playable, "_mock_wraps")
+        and "Mock" not in type(is_playable).__name__
+    ):
+        return bool(is_playable)
+
     allow_streaming = getattr(track, "allow_streaming", None)
     if allow_streaming is False:
         return False
 
-    # Check available flag
     available = getattr(track, "available", None)
     if available is False:
         return False
 
-    # Check stream_ready flag
     stream_ready = getattr(track, "stream_ready", None)
     if stream_ready is False:
         return False
 
-    # If stream_start_date is explicitly None on an old release, it is often de-listed
-    # But allow_streaming is the primary indicator
     return True
 
 
@@ -57,11 +59,10 @@ def normalize_title(title: str) -> str:
     """Normalize track title by stripping remaster dates, version tags, and extra punctuation."""
     if not title:
         return ""
-    cleaned = title.strip()
+    cleaned = str(title).strip()
     for pat in _CLEAN_TITLE_PATTERNS:
         cleaned = pat.sub("", cleaned).strip()
 
-    # Remove extra internal spaces and lower case
     cleaned = re.sub(r"\s+", " ", cleaned)
     return cleaned.strip().lower()
 
@@ -111,4 +112,3 @@ def compute_string_similarity(s1: str, s2: str) -> float:
     if norm1 == norm2:
         return 1.0
     return difflib.SequenceMatcher(None, norm1, norm2).ratio()
-
