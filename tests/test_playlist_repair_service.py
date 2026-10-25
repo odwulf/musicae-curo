@@ -357,3 +357,48 @@ def test_cli_playlist_replace_command(tmp_path: Path, monkeypatch):
     )
     assert res_live.exit_code == 0
     assert "Successfully replaced track #1" in res_live.stdout
+
+
+def test_cli_playlist_repair_table_output(tmp_path: Path, monkeypatch):
+    from typer.testing import CliRunner
+
+    temp_cfg = ConfigManager(custom_config_dir=tmp_path)
+    monkeypatch.setitem(state, "config", temp_cfg)
+
+    session = MagicMock()
+    pl = MagicMock(spec=UserPlaylist)
+    pl.id = "pl-repair-test"
+    pl.name = "Gotlib's Station"
+
+    # Track 1: Available
+    t1 = MagicMock(id=1, duration=200, available=True, allow_streaming=True, stream_ready=True)
+    t1.name = "Active Song"
+    t1.artist.name = "Artist 1"
+    t1.album.name = "Album 1"
+
+    # Track 2: Unavailable
+    t2 = MagicMock(id=2, duration=210, available=False, allow_streaming=False, stream_ready=False)
+    t2.name = "Under Pressure"
+    t2.artist.name = "Queen"
+    t2.album.name = "Hot Space"
+    pl.tracks.return_value = [t1, t2]
+    session.playlist.return_value = pl
+
+    cand = MagicMock(id=534098519, duration=210, available=True, allow_streaming=True, stream_ready=True)
+    cand.name = "Under Pressure"
+    cand.artist.name = "Queen"
+    cand.album.name = "Hot Space (Remaster)"
+    session.search.return_value = {"tracks": [cand]}
+
+    provider = TidalProvider(session=session, cfg=temp_cfg)
+    monkeypatch.setattr("curo.cli.get_active_provider", lambda *args, **kwargs: provider)
+
+    cli_runner = CliRunner()
+    res = cli_runner.invoke(app, ["playlist", "repair", "pl-repair-test"])
+    assert res.exit_code == 0
+    assert "Playlist Repair: Gotlib's Station" in res.stdout
+    assert "Under Pressure" in res.stdout
+    assert "Queen" in res.stdout
+    assert "534098519" in res.stdout
+    assert "Full diagnostic report written to:" in res.stdout
+
