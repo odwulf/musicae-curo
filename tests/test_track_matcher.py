@@ -25,6 +25,9 @@ def test_is_track_available():
 
 def test_normalize_title():
     assert normalize_title("Bohemian Rhapsody - 2011 Remaster") == "bohemian rhapsody"
+    assert normalize_title("Where the Wild Roses Grow (2011 Remaster)") == "where the wild roses grow"
+    assert normalize_title("Murder Ballads (2011 Remastered Version)") == "murder ballads"
+    assert normalize_title("Murder Ballads (Remastered 2011)") == "murder ballads"
     assert normalize_title("Billie Jean (Single Version)") == "billie jean"
     assert normalize_title("Heroes - 1999 Remastered Version") == "heroes"
     assert normalize_title("Get Lucky (feat. Pharrell Williams)") == "get lucky"

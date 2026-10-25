@@ -82,14 +82,18 @@ class CandidateFinder:
         # -------------------------------------------------------------------
         # Evaluate & Score Candidates
         # -------------------------------------------------------------------
+        orig_release_date = getattr(getattr(original_track, "album", None), "release_date", None)
         evaluations: List[CandidateEvaluation] = []
         for cand in candidates_by_id.values():
             cand_upc = getattr(getattr(cand, "album", None), "upc", None)
+            cand_release_date = getattr(getattr(cand, "album", None), "release_date", None)
             ev = evaluate_candidate(
                 original=original_track,
                 candidate=cand,
                 original_upc=orig_upc,
                 candidate_upc=cand_upc,
+                original_release_date=orig_release_date,
+                candidate_release_date=cand_release_date,
             )
             evaluations.append(ev)
 
