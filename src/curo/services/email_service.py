@@ -355,6 +355,7 @@ Dispatched automatically by Musicae Curo.
 
         total_added = sum(len(p.get("track_diff", {}).get("added_tracks", [])) for p in modified_playlists)
         total_removed = sum(len(p.get("track_diff", {}).get("removed_tracks", [])) for p in modified_playlists)
+        total_relinked = sum(len(p.get("track_diff", {}).get("relinked_tracks", [])) for p in modified_playlists)
         total_unavail_alerts = sum(p.get("new_alerts_count", 0) for p in modified_playlists)
         if new_alerts:
             total_unavail_alerts = max(total_unavail_alerts, len(new_alerts))
@@ -368,16 +369,32 @@ Dispatched automatically by Musicae Curo.
             t_diff = pl.get("track_diff", {})
             added = t_diff.get("added_tracks", [])
             removed = t_diff.get("removed_tracks", [])
+            relinked = t_diff.get("relinked_tracks", [])
             reordered = t_diff.get("reordered", False)
             unavail = pl.get("unavailable_tracks", [])
+
+            pl_provider = str(pl.get("provider") or provider_name or "Tidal").lower()
+            if "tidal" in pl_provider:
+                provider_display = "TIDAL"
+            elif "spotify" in pl_provider:
+                provider_display = "Spotify"
+            elif "deezer" in pl_provider:
+                provider_display = "Deezer"
+            elif "qobuz" in pl_provider:
+                provider_display = "Qobuz"
+            elif "ytmusic" in pl_provider or "youtube" in pl_provider:
+                provider_display = "YouTube Music"
+            else:
+                provider_display = pl_provider.capitalize()
 
             is_megamix = self.is_megamix_playlist(raw_p_name) and self.email_config.exclude_megamix_diff
 
             diff_items = []
             if is_megamix:
+                relink_info = f", ↻ {len(relinked)} relinked" if relinked else ""
                 diff_items.append(
                     f'<li style="color: #64748b; margin-bottom: 4px;">'
-                    f'<em>Daily mix refreshed with {t_count} tracks (+{len(added)} added, -{len(removed)} removed). Detailed track listing omitted.</em>'
+                    f'<em>Daily mix refreshed with {t_count} tracks (+{len(added)} added, -{len(removed)} removed{relink_info}). Detailed track listing omitted.</em>'
                     f'</li>'
                 )
                 for u in unavail:
@@ -388,6 +405,16 @@ Dispatched automatically by Musicae Curo.
                         f'<strong>! Unavailable:</strong> {u_title} {f"by {u_art}" if u_art else ""}</li>'
                     )
             else:
+                for t in relinked:
+                    title = html.escape(str(t.get("title", "Unknown Title")))
+                    art = html.escape(str(t.get("artist", "")))
+                    old_id = t.get("old_id")
+                    new_id = t.get("new_id")
+                    id_info = f' <span style="font-size: 11px; color: #64748b;">(ID: {old_id} &rarr; {new_id})</span>' if (old_id and new_id) else ""
+                    diff_items.append(
+                        f'<li style="color: #0284c7; margin-bottom: 4px;">'
+                        f'<strong>↻ Relinked by {provider_display}:</strong> {title}{f" by {art}" if art else ""}{id_info}</li>'
+                    )
                 for t in added:
                     title = html.escape(str(t.get("title", "Unknown Title")))
                     art = html.escape(str(t.get("artist", "")))
@@ -396,7 +423,7 @@ Dispatched automatically by Musicae Curo.
                     title = html.escape(str(t.get("title", "Unknown Title")))
                     art = html.escape(str(t.get("artist", "")))
                     diff_items.append(f'<li style="color: #b91c1c; margin-bottom: 4px;"><strong>- Removed:</strong> {title} {f"by {art}" if art else ""}</li>')
-                if reordered and not added and not removed:
+                if reordered and not added and not removed and not relinked:
                     diff_items.append('<li style="color: #d97706; margin-bottom: 4px;"><strong>~ Reordered:</strong> Track sequence updated.</li>')
                 for u in unavail:
                     u_title = html.escape(str(u.get("title", u.get("track_title", "Unknown Title"))))
@@ -421,19 +448,33 @@ Dispatched automatically by Musicae Curo.
             </div>
             """)
 
-        html_body = f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Musicae Curo • Playlist Digest</title>
-</head>
-<body style="margin: 0; padding: 24px 12px; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b;">
-  <div style="max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; border: 1px solid #cbd5e1; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.04);">
-    <div style="background-color: #0f172a; padding: 24px 28px; border-bottom: 3px solid #00E8E2; color: #ffffff;">
-      <h1 style="margin: 0; font-size: 20px; font-weight: 600;">Musicae Curo • Playlist Change Digest</h1>
-      <p style="margin: 6px 0 0 0; font-size: 13px; color: #94a3b8;">{now_str} • {len(modified_playlists)} playlist(s) modified</p>
-    </div>
-    <div style="padding: 20px 28px; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+        if total_relinked > 0:
+            summary_table_html = f"""
+      <table style="width: 100%; border-collapse: collapse;">
+        <tr>
+          <td style="width: 25%; padding: 10px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; text-align: center;">
+            <div style="font-size: 11px; color: #64748b; font-weight: 500; text-transform: uppercase;">Modified</div>
+            <div style="font-size: 20px; font-weight: 700; color: #0f172a; margin-top: 2px;">{len(modified_playlists)}</div>
+          </td>
+          <td style="width: 2%;"></td>
+          <td style="width: 23%; padding: 10px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; text-align: center;">
+            <div style="font-size: 11px; color: #15803d; font-weight: 500; text-transform: uppercase;">Added</div>
+            <div style="font-size: 20px; font-weight: 700; color: #15803d; margin-top: 2px;">+{total_added}</div>
+          </td>
+          <td style="width: 2%;"></td>
+          <td style="width: 23%; padding: 10px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; text-align: center;">
+            <div style="font-size: 11px; color: #b91c1c; font-weight: 500; text-transform: uppercase;">Removed</div>
+            <div style="font-size: 20px; font-weight: 700; color: #b91c1c; margin-top: 2px;">-{total_removed}</div>
+          </td>
+          <td style="width: 2%;"></td>
+          <td style="width: 23%; padding: 10px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; text-align: center;">
+            <div style="font-size: 11px; color: #0284c7; font-weight: 500; text-transform: uppercase;">Relinked</div>
+            <div style="font-size: 20px; font-weight: 700; color: #0284c7; margin-top: 2px;">↻ {total_relinked}</div>
+          </td>
+        </tr>
+      </table>"""
+        else:
+            summary_table_html = f"""
       <table style="width: 100%; border-collapse: collapse;">
         <tr>
           <td style="width: 33%; padding: 10px; background-color: #ffffff; border: 1px solid #e2e8f0; border-radius: 6px; text-align: center;">
@@ -451,7 +492,22 @@ Dispatched automatically by Musicae Curo.
             <div style="font-size: 20px; font-weight: 700; color: #b91c1c; margin-top: 2px;">-{total_removed}</div>
           </td>
         </tr>
-      </table>
+      </table>"""
+
+        html_body = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Musicae Curo • Playlist Digest</title>
+</head>
+<body style="margin: 0; padding: 24px 12px; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b;">
+  <div style="max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; border: 1px solid #cbd5e1; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.04);">
+    <div style="background-color: #0f172a; padding: 24px 28px; border-bottom: 3px solid #00E8E2; color: #ffffff;">
+      <h1 style="margin: 0; font-size: 20px; font-weight: 600;">Musicae Curo • Playlist Change Digest</h1>
+      <p style="margin: 6px 0 0 0; font-size: 13px; color: #94a3b8;">{now_str} • {len(modified_playlists)} playlist(s) modified</p>
+    </div>
+    <div style="padding: 20px 28px; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+      {summary_table_html}
     </div>
     <div style="padding: 24px 28px;">
       <h2 style="margin: 0 0 14px 0; font-size: 16px; font-weight: 600; color: #0f172a;">Change Details</h2>
@@ -464,10 +520,11 @@ Dispatched automatically by Musicae Curo.
 </body>
 </html>"""
 
+        relink_summary_text = f" | Relinked: {total_relinked}" if total_relinked > 0 else ""
         lines = [
             f"Musicae Curo • Playlist Change Digest ({now_str})",
             "=" * 50,
-            f"Modified Playlists: {len(modified_playlists)} | Added: +{total_added} | Removed: -{total_removed}",
+            f"Modified Playlists: {len(modified_playlists)} | Added: +{total_added} | Removed: -{total_removed}{relink_summary_text}",
             "",
         ]
         for pl in modified_playlists:
@@ -477,24 +534,45 @@ Dispatched automatically by Musicae Curo.
             t_diff = pl.get("track_diff", {})
             added = t_diff.get("added_tracks", [])
             removed = t_diff.get("removed_tracks", [])
+            relinked = t_diff.get("relinked_tracks", [])
             unavail = pl.get("unavailable_tracks", [])
+
+            pl_provider = str(pl.get("provider") or provider_name or "Tidal").lower()
+            if "tidal" in pl_provider:
+                provider_display = "TIDAL"
+            elif "spotify" in pl_provider:
+                provider_display = "Spotify"
+            elif "deezer" in pl_provider:
+                provider_display = "Deezer"
+            elif "qobuz" in pl_provider:
+                provider_display = "Qobuz"
+            elif "ytmusic" in pl_provider or "youtube" in pl_provider:
+                provider_display = "YouTube Music"
+            else:
+                provider_display = pl_provider.capitalize()
 
             is_megamix = self.is_megamix_playlist(raw_p_name) and self.email_config.exclude_megamix_diff
 
             if is_megamix:
+                relink_info = f", {len(relinked)} relinked" if relinked else ""
                 lines.append(f"* {raw_p_name} (v{ver}) [Daily Mix]:")
-                lines.append(f"  ~ Daily mix refreshed with {t_count} tracks (+{len(added)} added, -{len(removed)} removed; detailed track list omitted)")
+                lines.append(f"  ~ Daily mix refreshed with {t_count} tracks (+{len(added)} added, -{len(removed)} removed{relink_info}; detailed track list omitted)")
                 for u in unavail:
                     u_title = u.get("title", u.get("track_title", "Unknown Title"))
                     u_art = u.get("artist", u.get("artist_name", ""))
                     lines.append(f"  ! Unavailable: {u_title} {f'by {u_art}' if u_art else ''}")
             else:
                 lines.append(f"* {raw_p_name} (v{ver}):")
+                for t in relinked:
+                    old_id = t.get("old_id")
+                    new_id = t.get("new_id")
+                    id_info = f" (ID: {old_id} -> {new_id})" if (old_id and new_id) else ""
+                    lines.append(f"  * Relinked by {provider_display}: {t.get('title')} by {t.get('artist')}{id_info}")
                 for t in added:
                     lines.append(f"  + Added: {t.get('title')} by {t.get('artist')}")
                 for t in removed:
                     lines.append(f"  - Removed: {t.get('title')} by {t.get('artist')}")
-                if t_diff.get("reordered") and not added and not removed:
+                if t_diff.get("reordered") and not added and not removed and not relinked:
                     lines.append("  ~ Reordered: Track sequence updated.")
                 for u in unavail:
                     u_title = u.get("title", u.get("track_title", "Unknown Title"))

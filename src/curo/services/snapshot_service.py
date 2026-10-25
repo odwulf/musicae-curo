@@ -13,15 +13,202 @@ from typing import Any, Dict, List, Optional, Union
 from curo.config import ConfigManager, config_manager
 from curo.core.provider import MusicProvider
 from curo.services.metadata_serializer import serialize_playlist
-from curo.services.track_matcher import is_track_available
+from curo.services.track_matcher import (
+    compute_string_similarity,
+    is_track_available,
+    normalize_title,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_str(val: Any) -> str:
+    if val is None or hasattr(val, "_mock_return_value") or hasattr(val, "_mock_wraps") or "Mock" in type(val).__name__:
+        return ""
+    return str(val).strip()
+
+
+def _safe_int(val: Any) -> Optional[int]:
+    if val is None or hasattr(val, "_mock_return_value") or hasattr(val, "_mock_wraps") or "Mock" in type(val).__name__:
+        return None
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return None
 
 
 def _slugify(text: str) -> str:
     slug = re.sub(r"[^\w\s-]", "", text.strip().lower())
     slug = re.sub(r"[-\s]+", "_", slug).strip("_")
     return slug or "playlist"
+
+
+def compute_track_diff(
+    prev_tracks: List[Dict[str, Any]],
+    curr_tracks: List[Any],
+) -> Dict[str, Any]:
+    """Compute difference between previous snapshot tracks and current tracks.
+
+    Accurately distinguishes between genuinely added/removed tracks and tracks
+    that were relinked/replaced by the provider under a new platform track ID
+    (e.g. catalog re-deliveries, remaster updates, license migrations).
+    """
+    prev_ids = [_safe_str(t.get("id")) for t in prev_tracks if t.get("id")]
+    prev_ids = [pid for pid in prev_ids if pid]
+
+    curr_ids: List[str] = []
+    for t in curr_tracks:
+        tid = _safe_str(getattr(t, "id", None) or (t.get("id") if isinstance(t, dict) else None))
+        if tid:
+            curr_ids.append(tid)
+
+    prev_set = set(prev_ids)
+    curr_set = set(curr_ids)
+
+    added_ids = curr_set - prev_set
+    removed_ids = prev_set - curr_set
+
+    reordered = False
+    if not added_ids and not removed_ids and prev_ids != curr_ids:
+        reordered = True
+
+    raw_added: List[Dict[str, Any]] = []
+    for t in curr_tracks:
+        tid = _safe_str(getattr(t, "id", None) or (t.get("id") if isinstance(t, dict) else None))
+        if tid in added_ids:
+            title = (
+                _safe_str(getattr(t, "title", None))
+                or _safe_str(getattr(t, "name", None))
+                or _safe_str(t.get("title") if isinstance(t, dict) else "")
+                or _safe_str(t.get("name") if isinstance(t, dict) else "")
+            )
+            artist_obj = getattr(t, "artist", None) or (t.get("artist") if isinstance(t, dict) else None)
+            artist_name = (
+                _safe_str(getattr(artist_obj, "name", None))
+                or _safe_str(artist_obj.get("name") if isinstance(artist_obj, dict) else "")
+                or _safe_str(artist_obj)
+            )
+            isrc = _safe_str(getattr(t, "isrc", None) or (t.get("isrc") if isinstance(t, dict) else ""))
+            dur = _safe_int(
+                getattr(t, "duration_seconds", None)
+                or getattr(t, "duration", None)
+                or (t.get("duration_seconds") if isinstance(t, dict) else None)
+                or (t.get("duration") if isinstance(t, dict) else None)
+            )
+            raw_added.append({
+                "id": tid,
+                "title": title or "Unknown Title",
+                "artist": artist_name,
+                "isrc": isrc or None,
+                "duration_seconds": dur,
+            })
+
+    raw_removed: List[Dict[str, Any]] = []
+    for t in prev_tracks:
+        tid = _safe_str(t.get("id"))
+        if tid in removed_ids:
+            title = _safe_str(t.get("title")) or _safe_str(t.get("name"))
+            artist_val = t.get("artist")
+            artist_name = (
+                _safe_str(artist_val.get("name"))
+                if isinstance(artist_val, dict)
+                else _safe_str(artist_val)
+            )
+            isrc = _safe_str(t.get("isrc"))
+            dur = _safe_int(t.get("duration_seconds") or t.get("duration"))
+            raw_removed.append({
+                "id": tid,
+                "title": title or "Unknown Title",
+                "artist": artist_name,
+                "isrc": isrc or None,
+                "duration_seconds": dur,
+            })
+
+    relinked_tracks: List[Dict[str, Any]] = []
+    matched_added_indices: Set[int] = set()
+    matched_removed_indices: Set[int] = set()
+
+    # Pass 1: Match by ISRC (exact match of standardized recording identifier)
+    for r_idx, r in enumerate(raw_removed):
+        if r_idx in matched_removed_indices:
+            continue
+        r_isrc = (r.get("isrc") or "").upper()
+        if not r_isrc or len(r_isrc) < 5:
+            continue
+
+        for a_idx, a in enumerate(raw_added):
+            if a_idx in matched_added_indices:
+                continue
+            a_isrc = (a.get("isrc") or "").upper()
+            if r_isrc == a_isrc:
+                matched_removed_indices.add(r_idx)
+                matched_added_indices.add(a_idx)
+                relinked_tracks.append({
+                    "old_id": r["id"],
+                    "new_id": a["id"],
+                    "title": a["title"] or r["title"],
+                    "artist": a["artist"] or r["artist"],
+                    "match_reason": "isrc",
+                })
+                break
+
+    # Pass 2: Match by metadata (normalized title and artist similarity)
+    for r_idx, r in enumerate(raw_removed):
+        if r_idx in matched_removed_indices:
+            continue
+        r_title_norm = normalize_title(r["title"])
+        r_artist_norm = normalize_title(r["artist"])
+        if not r_title_norm or not r_artist_norm:
+            continue
+
+        best_a_idx = None
+        best_score = 0.0
+
+        for a_idx, a in enumerate(raw_added):
+            if a_idx in matched_added_indices:
+                continue
+            a_title_norm = normalize_title(a["title"])
+            a_artist_norm = normalize_title(a["artist"])
+
+            title_sim = 1.0 if r_title_norm == a_title_norm else compute_string_similarity(r["title"], a["title"])
+            if title_sim < 0.85:
+                continue
+
+            artist_sim = 1.0 if r_artist_norm == a_artist_norm else compute_string_similarity(r["artist"], a["artist"])
+            if artist_sim < 0.80:
+                continue
+
+            r_dur = r.get("duration_seconds")
+            a_dur = a.get("duration_seconds")
+            if r_dur and a_dur and abs(r_dur - a_dur) > 20:
+                continue
+
+            score = (title_sim * 0.6) + (artist_sim * 0.4)
+            if score > best_score:
+                best_score = score
+                best_a_idx = a_idx
+
+        if best_a_idx is not None and best_score >= 0.85:
+            matched_removed_indices.add(r_idx)
+            matched_added_indices.add(best_a_idx)
+            a_match = raw_added[best_a_idx]
+            relinked_tracks.append({
+                "old_id": r["id"],
+                "new_id": a_match["id"],
+                "title": a_match["title"] or r["title"],
+                "artist": a_match["artist"] or r["artist"],
+                "match_reason": "metadata",
+            })
+
+    final_added = [a for idx, a in enumerate(raw_added) if idx not in matched_added_indices]
+    final_removed = [r for idx, r in enumerate(raw_removed) if idx not in matched_removed_indices]
+
+    return {
+        "added_tracks": final_added,
+        "removed_tracks": final_removed,
+        "relinked_tracks": relinked_tracks,
+        "reordered": reordered,
+    }
 
 
 class SnapshotService:
@@ -255,40 +442,14 @@ class SnapshotService:
         snapshots_list = manifest.get("snapshots", [])
         last_snapshot_exists = bool(snapshots_list and (pl_dir / snapshots_list[-1].get("filename", "")).exists())
 
-        track_diff: Dict[str, Any] = {"added_tracks": [], "removed_tracks": [], "reordered": False}
+        track_diff: Dict[str, Any] = {"added_tracks": [], "removed_tracks": [], "relinked_tracks": [], "reordered": False}
         if has_changed and last_snapshot_exists:
             try:
                 prev_file = pl_dir / snapshots_list[-1]["filename"]
                 with open(prev_file, "r", encoding="utf-8") as f:
                     prev_data = json.load(f)
                     prev_tracks = prev_data.get("tracks", [])
-                    prev_ids = [str(t.get("id")) for t in prev_tracks]
-                    curr_ids = [str(getattr(t, "id", "")) for t in tracks]
-
-                    prev_set = set(prev_ids)
-                    curr_set = set(curr_ids)
-
-                    added_ids = curr_set - prev_set
-                    removed_ids = prev_set - curr_set
-
-                    for t in tracks:
-                        if str(getattr(t, "id", "")) in added_ids:
-                            track_diff["added_tracks"].append({
-                                "id": getattr(t, "id", None),
-                                "title": getattr(t, "name", None) or getattr(t, "title", ""),
-                                "artist": getattr(getattr(t, "artist", None), "name", ""),
-                            })
-
-                    for t in prev_tracks:
-                        if str(t.get("id")) in removed_ids:
-                            track_diff["removed_tracks"].append({
-                                "id": t.get("id"),
-                                "title": t.get("title") or t.get("name", ""),
-                                "artist": getattr(t.get("artist"), "get", lambda k, d="": d)("name") if isinstance(t.get("artist"), dict) else "",
-                            })
-
-                    if not added_ids and not removed_ids and prev_ids != curr_ids:
-                        track_diff["reordered"] = True
+                    track_diff = compute_track_diff(prev_tracks, tracks)
             except Exception as e:
                 logger.debug(f"Failed to compute track diff for '{slug}': {e}")
 
@@ -428,39 +589,13 @@ class SnapshotService:
                     self._append_alert(alert)
                     newly_unavailable_alerts.append(alert)
 
-        track_diff = {"added_tracks": [], "removed_tracks": [], "reordered": False}
+        track_diff = {"added_tracks": [], "removed_tracks": [], "relinked_tracks": [], "reordered": False}
         if snapshots_list and (fav_dir / snapshots_list[-1]["filename"]).exists():
             try:
                 with open(fav_dir / snapshots_list[-1]["filename"], "r", encoding="utf-8") as f:
                     prev_data = json.load(f)
                     prev_tracks = prev_data.get("tracks", [])
-                    prev_ids = [str(t.get("id")) for t in prev_tracks if t.get("id")]
-                    curr_ids = [str(getattr(t, "id", "")) for t in tracks if getattr(t, "id", None)]
-
-                    prev_set = set(prev_ids)
-                    curr_set = set(curr_ids)
-
-                    added_ids = curr_set - prev_set
-                    removed_ids = prev_set - curr_set
-
-                    for t in tracks:
-                        if str(getattr(t, "id", "")) in added_ids:
-                            track_diff["added_tracks"].append({
-                                "id": getattr(t, "id", None),
-                                "title": getattr(t, "name", None) or getattr(t, "title", ""),
-                                "artist": getattr(getattr(t, "artist", None), "name", ""),
-                            })
-
-                    for t in prev_tracks:
-                        if str(t.get("id")) in removed_ids:
-                            track_diff["removed_tracks"].append({
-                                "id": t.get("id"),
-                                "title": t.get("title") or t.get("name", ""),
-                                "artist": getattr(t.get("artist"), "get", lambda k, d="": d)("name") if isinstance(t.get("artist"), dict) else "",
-                            })
-
-                    if not added_ids and not removed_ids and prev_ids != curr_ids:
-                        track_diff["reordered"] = True
+                    track_diff = compute_track_diff(prev_tracks, tracks)
             except Exception as e:
                 logger.debug(f"Failed to compute track diff for '{slug}': {e}")
 
@@ -535,6 +670,7 @@ class SnapshotService:
             "track_diff": track_diff,
             "added_tracks": track_diff["added_tracks"],
             "removed_tracks": track_diff["removed_tracks"],
+            "relinked_tracks": track_diff.get("relinked_tracks", []),
         }
 
     def snapshot_all_playlists(

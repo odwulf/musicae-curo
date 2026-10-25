@@ -262,3 +262,94 @@ def test_cli_playlist_snapshot_and_alerts(temp_config: ConfigManager, monkeypatc
     assert res_alerts.exit_code == 0
     alerts_data = json.loads(res_alerts.stdout)
     assert isinstance(alerts_data, list)
+
+
+def test_compute_track_diff_detects_relinked_tracks():
+    from curo.services.snapshot_service import compute_track_diff
+
+    # Previous snapshot: 3 tracks
+    prev_tracks = [
+        # Track 1: Will be replaced by ISRC
+        {"id": "101", "title": "Track One", "artist": {"name": "Artist A"}, "isrc": "US1111111111", "duration": 200},
+        # Track 2: Will be replaced by Metadata (remaster title variation, no ISRC)
+        {"id": "102", "title": "Track Two", "artist": {"name": "Artist B"}, "isrc": None, "duration": 180},
+        # Track 3: Genuinely removed
+        {"id": "103", "title": "Track Three", "artist": {"name": "Artist C"}, "isrc": "US3333333333", "duration": 220},
+    ]
+
+    # Current tracks:
+    curr_tracks = [
+        # Track 1 replacement: New ID, same ISRC
+        MagicMock(id=201, title="Track One", name="Track One", isrc="US1111111111", duration=200, artist=MagicMock(name="Artist A")),
+        # Track 2 replacement: New ID, remastered title, same artist, duration close (+2s)
+        MagicMock(id=202, title="Track Two (2024 Remaster)", name="Track Two (2024 Remaster)", isrc=None, duration=182, artist=MagicMock(name="Artist B")),
+        # Track 4: Genuinely added new song
+        MagicMock(id=204, title="Brand New Song", name="Brand New Song", isrc="US4444444444", duration=240, artist=MagicMock(name="Artist D")),
+    ]
+    curr_tracks[0].artist.name = "Artist A"
+    curr_tracks[1].artist.name = "Artist B"
+    curr_tracks[2].artist.name = "Artist D"
+
+    diff = compute_track_diff(prev_tracks, curr_tracks)
+
+    # Relinked tracks should have 2 items (Track One and Track Two)
+    assert len(diff["relinked_tracks"]) == 2
+    relinked_ids = [(r["old_id"], r["new_id"]) for r in diff["relinked_tracks"]]
+    assert ("101", "201") in relinked_ids
+    assert ("102", "202") in relinked_ids
+
+    # Genuinely added should only contain Brand New Song
+    assert len(diff["added_tracks"]) == 1
+    assert diff["added_tracks"][0]["id"] == "204"
+    assert diff["added_tracks"][0]["title"] == "Brand New Song"
+
+    # Genuinely removed should only contain Track Three
+    assert len(diff["removed_tracks"]) == 1
+    assert diff["removed_tracks"][0]["id"] == "103"
+    assert diff["removed_tracks"][0]["title"] == "Track Three"
+
+
+def test_snapshot_playlist_integration_with_relinking(temp_config: ConfigManager):
+    session = MagicMock()
+    mock_pl = MagicMock(id="pl-relink")
+    mock_pl.name = "Relink Test Playlist"
+    mock_pl.description = ""
+    mock_pl.public = False
+
+    t1 = MagicMock(id=501, isrc="GB1111111111", duration=200, available=True, allow_streaming=True, stream_ready=True)
+    t1.name = "Original Tune"
+    t1.artist.name = "Great Band"
+    t1.album.name = "Album 1"
+    t1.album.upc = "UPC501"
+    t1.album.release_date = "2010-01-01"
+
+    mock_pl.tracks.return_value = [t1]
+    session.user.playlists.return_value = [mock_pl]
+    session.playlist.return_value = mock_pl
+
+    provider = TidalProvider(session=session, cfg=temp_config)
+    service = SnapshotService(provider=provider, cfg=temp_config)
+
+    # Initial snapshot v1
+    res1 = service.snapshot_playlist("pl-relink")
+    assert res1["version"] == 1
+
+    # Tidal replaces track with new ID 502 (same ISRC)
+    t1_relinked = MagicMock(id=502, isrc="GB1111111111", duration=200, available=True, allow_streaming=True, stream_ready=True)
+    t1_relinked.name = "Original Tune"
+    t1_relinked.artist.name = "Great Band"
+    t1_relinked.album.name = "Album 1 (Reissue)"
+    t1_relinked.album.upc = "UPC502"
+    t1_relinked.album.release_date = "2024-01-01"
+
+    mock_pl.tracks.return_value = [t1_relinked]
+    res2 = service.snapshot_playlist("pl-relink")
+    assert res2["version"] == 2
+    assert res2["has_changed"] is True
+
+    diff = res2["track_diff"]
+    assert len(diff["relinked_tracks"]) == 1
+    assert diff["relinked_tracks"][0]["old_id"] == "501"
+    assert diff["relinked_tracks"][0]["new_id"] == "502"
+    assert len(diff["added_tracks"]) == 0
+    assert len(diff["removed_tracks"]) == 0
