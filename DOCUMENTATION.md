@@ -214,6 +214,7 @@ jobs:
 | `snapshot_all_playlists` | Runs SHA-256 versioned snapshots across all personal playlists, updates track history registry, checks track availability, and sends email notifications. | - `alert_on_unavailable` (bool, default: `true`)<br>- `notify` (bool, default: `true`)<br>- `force_all_mail` (bool, default: `false`) |
 | `snapshot_playlist` | Takes a versioned snapshot of a single designated playlist. | - `playlist` (required: playlist title or ID)<br>- `alert_on_unavailable` (bool, default: `true`) |
 | `export_playlist` | Exports a designated playlist to disk in the specified format. | - `playlist` (required: playlist title or ID)<br>- `format` (`json`, `m3u8`, or `csv`, default: `json`) |
+| `sync_playlist` | Synchronizes playlist tracks between providers or within the same provider (`mirror` or `append` modes). | - `source_playlist` (required: title or ID)<br>- `target_playlist` (optional: target title)<br>- `source_provider` (optional: provider name)<br>- `target_provider` (optional: target provider name)<br>- `mode` (`mirror` or `append`, default: `mirror`)<br>- `threshold` (float, default: `0.8`)<br>- `dry_run` (bool, default: `false`)<br>- `create_if_missing` (bool, default: `true`) |
 
 ### Default Shipped Jobs
 
@@ -295,6 +296,8 @@ curo playlist snapshot [id] [--no-alert] [--notify] [--all-mail]
 curo playlist alerts [--limit 50]
 curo playlist repair <id> [--threshold 0.8] [--live]
 curo playlist replace <id> --track <id|#pos> --with <id|isrc|upc> [--live]
+curo playlist compare <source_id> <target_id> [--from <prov>] [--to <prov>] [--threshold 0.8]
+curo playlist sync <source_id> [--target <name>] [--from <prov>] [--to <prov>] [--mode mirror|append] [--threshold 0.8] [--live]
 ```
 
 ### Albums (`curo album`)
