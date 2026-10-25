@@ -47,8 +47,8 @@ Musicae Curo adheres to strict Clean Architecture and Hexagonal / Port-and-Adapt
       +------------------+---------------+---------------+------------------+
       |                  |               |               |                  |
       v                  v               v               v                  v
-[TidalProvider]   [DeezerProvider][SpotifyProvider][QobuzProvider]  [YTMusicProvider]
- (tidalapi SDK)      (Scaffold)      (Scaffold)      (Scaffold)        (Scaffold)
+[TidalProvider]   [SpotifyProvider]   [DeezerProvider] [QobuzProvider]  [YTMusicProvider]
+ (tidalapi SDK)     (spotipy SDK)        (Scaffold)       (Scaffold)        (Scaffold)
 ```
 
 ### Core Domain Models (`curo.core.models`)
@@ -77,13 +77,13 @@ Adapters self-register into `ProviderRegistry`. At runtime, the active provider 
 | Provider | Identifier (`-p`) | Status | Implementation Details |
 | :--- | :--- | :--- | :--- |
 | **Tidal** | `tidal` | **Active (Fully Implemented)** | Device code OAuth, playlists, mixes, search, and live repair via `tidalapi`. |
-| **Spotify** | `spotify` | **Planned (Scaffolded Stub)** | Interface defined in `curo.providers.spotify`; requires `spotipy` client integration. |
+| **Spotify** | `spotify` | **Active (Fully Implemented)** | OAuth2 authorization code / PKCE flow, playlists, algorithmic mixes, search, and catalog lookup via `spotipy`. |
 | **Deezer** | `deezer` | **Planned (Scaffolded Stub)** | Interface defined in `curo.providers.deezer`; ready for community implementation. |
 | **Qobuz** | `qobuz` | **Planned (Scaffolded Stub)** | Interface defined in `curo.providers.qobuz`; ready for community implementation. |
 | **YouTube Music** | `ytmusic` / `youtube_music` | **Planned (Scaffolded Stub)** | Interface defined in `curo.providers.ytmusic`; ready for community implementation. |
 
 > [!IMPORTANT]
-> **Tidal is currently the only active, fully operational provider.** The other providers (Spotify, Deezer, Qobuz, YouTube Music) are scaffolded architectural stubs ready for future integration. Attempting to run library or playback operations against them will clearly inform you that the adapter is not yet implemented.
+> **Tidal and Spotify are currently active, fully operational providers.** The other providers (Deezer, Qobuz, YouTube Music) are scaffolded architectural stubs ready for future integration. Attempting to run library or playback operations against scaffolded stubs will clearly inform you that the adapter is not yet implemented.
 
 ---
 
@@ -97,6 +97,7 @@ Musicae Curo manages its configuration and state in a secure dedicated directory
 | `~/.config/curo/config.json` | General config (default provider, SMTP setup, paths) | `0600` (`rw-------`) |
 | `~/.config/curo/jobs.yaml` | Declarative scheduled job definitions | `0600` (`rw-------`) |
 | `~/.config/curo/tidal_session.json` | OAuth token cache for Tidal adapter | `0600` (`rw-------`) |
+| `~/.config/curo/spotify_session.json` | OAuth token cache for Spotify adapter | `0600` (`rw-------`) |
 | `~/.config/curo/snapshots/<slug>/` | Incremental versioned SHA-256 JSON backups | `0700` (`rwx------`) |
 | `~/.config/curo/track_registry.json` | Historical healthy track metadata registry | `0600` (`rw-------`) |
 | `~/.config/curo/availability_alerts.log` | Append-only log of delisted tracks | `0600` (`rw-------`) |

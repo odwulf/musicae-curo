@@ -381,6 +381,7 @@ class PlaylistSyncService:
             else []
         )
 
+        matched_target_indices: Set[int] = set()
         resolved_track_ids: List[str] = []
         resolved_items: List[Dict[str, Any]] = []
         unresolvable_items: List[Dict[str, Any]] = []
@@ -391,10 +392,13 @@ class PlaylistSyncService:
 
             # Check if track is already present in target playlist
             matched_in_target = None
-            for t in target_tracks:
+            for t_idx, t in enumerate(target_tracks):
+                if t_idx in matched_target_indices:
+                    continue
                 matches, score, method = self._tracks_match(s, t, threshold=threshold)
                 if matches:
                     matched_in_target = t
+                    matched_target_indices.add(t_idx)
                     break
 
             if matched_in_target:
