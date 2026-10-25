@@ -45,12 +45,28 @@ uv run tidal-cli auth status
 uv run tidal-cli mix list
 ```
 
-### 3. Generate Megamix Manually
-```bash
 uv run tidal-cli mix megamix
 ```
 
-### 4. Setup Linux Server Cron Job
+### 4. Backup & Snapshot Playlists (Versioning & Alerts)
+```bash
+# Versioned backup of all playlists with SHA-256 change detection
+uv run tidal-cli playlist snapshot
+
+# View delisted/unavailable track alerts
+uv run tidal-cli playlist alerts
+```
+
+### 5. Repair Unavailable Tracks in Playlists
+```bash
+# Dry-run analysis with 80% threshold and historical ISRC recovery
+uv run tidal-cli playlist repair "My Playlist"
+
+# Live replacement on Tidal
+uv run tidal-cli playlist repair "My Playlist" --live
+```
+
+### 6. Setup Linux Server Cron Job
 Get the exact crontab line for your server:
 ```bash
 uv run tidal-cli job cron-help

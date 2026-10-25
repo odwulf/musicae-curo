@@ -18,6 +18,7 @@ from tidal_cli.services.album_service import AlbumService
 from tidal_cli.services.job_runner import JobExecutionError, JobRunner
 from tidal_cli.services.mix_service import MixService
 from tidal_cli.services.playlist_service import PlaylistService
+from tidal_cli.services.snapshot_service import SnapshotService
 
 app = typer.Typer(
     name="tidal-cli",
@@ -366,6 +367,117 @@ def playlist_repair(
         console.print(
             "[dim]Note: Baseline threshold is set to 100% and Dry-Run is active. No tracks were replaced.[/dim]"
         )
+
+
+@playlist_app.command("snapshot")
+def playlist_snapshot(
+    identifier: Optional[str] = typer.Argument(
+        None, help="Playlist ID or Name (leave empty or specify 'all' to snapshot all personal playlists)"
+    ),
+    alert: bool = typer.Option(True, "--alert/--no-alert", help="Record alerts if unavailable tracks are detected"),
+) -> None:
+    """Create a versioned snapshot of personal playlists and record unavailable track alerts."""
+    mgr = SessionManager(state["config"])
+    try:
+        session = mgr.load_session()
+        snapshot_svc = SnapshotService(session, cfg=state["config"])
+        if identifier and identifier.lower() != "all":
+            result = snapshot_svc.snapshot_playlist(identifier, alert_on_unavailable=alert)
+            snapshots = [result]
+        else:
+            batch_res = snapshot_svc.snapshot_all_playlists(alert_on_unavailable=alert)
+            snapshots = batch_res.get("playlists", [])
+    except Exception as e:
+        err_console.print(f"[bold red]Snapshot error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    if state["json_mode"]:
+        console.print_json(data=snapshots)
+        return
+
+    table = Table(title="Playlist Snapshots & Version Tracking", border_style="cyan")
+    table.add_column("Playlist", style="bold")
+    table.add_column("Status")
+    table.add_column("Version", justify="right")
+    table.add_column("Tracks", justify="right")
+    table.add_column("Unavailable", justify="right")
+    table.add_column("Snapshot File", style="dim")
+
+    for s in snapshots:
+        if "error" in s:
+            table.add_row(
+                s.get("playlist_name", "Unknown"),
+                "[red]Error[/red]",
+                "-",
+                "-",
+                "-",
+                s.get("error", ""),
+            )
+            continue
+
+        status_str = "[green]Created[/green]" if s.get("status") == "created" else "[dim]Unchanged[/dim]"
+        unavail = s.get("unavailable_tracks_count", 0)
+        unavail_str = f"[bold red]{unavail}[/bold red]" if unavail > 0 else "[green]0[/green]"
+        snap_file = Path(s["snapshot_file"]).name if s.get("snapshot_file") else "-"
+        table.add_row(
+            s.get("name", s.get("playlist_name", "Unknown")),
+            status_str,
+            str(s.get("version", "-")),
+            str(s.get("track_count", s.get("total_tracks", "-"))),
+            unavail_str,
+            snap_file,
+        )
+
+    console.print(table)
+    total_unavail = sum(s.get("unavailable_tracks_count", 0) for s in snapshots if "error" not in s)
+    if total_unavail > 0:
+        console.print(
+            f"\n[bold yellow]Alert:[/bold yellow] Found {total_unavail} unavailable track(s) across playlists."
+            f"\nRun [cyan]tidal-cli playlist alerts[/cyan] to view details or [cyan]tidal-cli playlist repair <id>[/cyan] to find replacements."
+        )
+
+
+@playlist_app.command("alerts")
+def playlist_alerts(
+    limit: int = typer.Option(50, "--limit", "-n", help="Maximum number of recent alerts to display"),
+) -> None:
+    """Display recent track availability alerts logged during snapshots."""
+    snapshot_svc = SnapshotService(None, cfg=state["config"])
+    alerts = snapshot_svc.get_recent_alerts(limit=limit)
+
+    if state["json_mode"]:
+        console.print_json(data=alerts)
+        return
+
+    if not alerts:
+        console.print(
+            Panel(
+                "[green]No availability alerts found in log.[/green]",
+                title="Track Availability Alerts",
+                border_style="green",
+            )
+        )
+        return
+
+    table = Table(title=f"Recent Availability Alerts ({len(alerts)} entries)", border_style="red")
+    table.add_column("Timestamp", style="dim")
+    table.add_column("Playlist", style="bold")
+    table.add_column("Track ID", justify="right")
+    table.add_column("Track Name")
+    table.add_column("Artist")
+    table.add_column("Reason", style="red")
+
+    for a in alerts:
+        table.add_row(
+            a.get("timestamp", "-"),
+            a.get("playlist_name", "-"),
+            str(a.get("track_id", "-")),
+            a.get("track_title", "-"),
+            a.get("artist_name", "-"),
+            a.get("reason", "unavailable"),
+        )
+
+    console.print(table)
 
 
 # ---------------------------------------------------------------------------
