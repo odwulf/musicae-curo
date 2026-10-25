@@ -405,12 +405,27 @@ class SnapshotService:
                 unavailable_tracks.append(unavail_info)
 
                 if alert_on_unavailable:
-                    alert = self.log_availability_alert(
-                        track=t,
-                        playlist_title=f"Favorite Tracks ({self.provider.display_name})",
-                        playlist_id=slug,
-                        index=idx,
-                    )
+                    alert = {
+                        "timestamp": now_utc.isoformat(),
+                        "provider": self.provider.name,
+                        "playlist_id": slug,
+                        "playlist_name": f"Favorite Tracks ({self.provider.display_name})",
+                        "playlist_slug": slug,
+                        "track_id": getattr(t, "id", None),
+                        "title": unavail_info["title"],
+                        "track_title": unavail_info["title"],
+                        "artist": unavail_info["artist"],
+                        "artist_name": unavail_info["artist"],
+                        "album": getattr(getattr(t, "album", None), "name", None) or getattr(getattr(t, "album", None), "title", "Unknown Album"),
+                        "reason": "unavailable",
+                        "historical_isrc": unavail_info["isrc"],
+                        "historical_upc": unavail_info["album_upc"],
+                        "message": (
+                            f"Favorite track '{unavail_info['title']}' by '{unavail_info['artist']}' "
+                            f"is UNAVAILABLE on {self.provider.display_name}"
+                        ),
+                    }
+                    self._append_alert(alert)
                     newly_unavailable_alerts.append(alert)
 
         track_diff = {"added_tracks": [], "removed_tracks": [], "reordered": False}
@@ -496,6 +511,7 @@ class SnapshotService:
 
         is_created = bool(has_changed or not last_snapshot_exists)
         return {
+            "success": True,
             "id": slug,
             "playlist_id": slug,
             "name": f"Favorite Tracks ({self.provider.display_name})",
@@ -505,15 +521,20 @@ class SnapshotService:
             "status": "created" if is_created else "unchanged",
             "has_changed": has_changed,
             "content_hash": current_hash,
+            "checksum": current_hash,
             "track_count": len(tracks),
             "total_tracks": len(tracks),
             "unavailable_count": len(unavailable_tracks),
             "unavailable_tracks_count": len(unavailable_tracks),
             "unavailable_tracks": unavailable_tracks,
+            "unavailable_alerts_count": len(newly_unavailable_alerts),
             "new_alerts_count": len(newly_unavailable_alerts),
             "snapshot_file": saved_path,
+            "snapshot_path": saved_path,
             "version": len(snapshots_list),
             "track_diff": track_diff,
+            "added_tracks": track_diff["added_tracks"],
+            "removed_tracks": track_diff["removed_tracks"],
         }
 
     def snapshot_all_playlists(

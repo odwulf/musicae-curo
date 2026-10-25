@@ -262,6 +262,7 @@ When streaming services delist or retire a track, its metadata (such as ISRC or 
 Musicae Curo includes a built-in notification engine (`curo notify`) for headless server alerts:
 
 - **Daily Change Digest**: Dispatched when playlists are modified or delisted tracks are discovered. Includes itemized track additions, removals, and availability warnings.
+- **Daily Mix & Megamix Summarization**: Ephemeral daily mix and megamix playlists are automatically summarized rather than exhaustively listing hundreds of rotating additions and removals, keeping digests clean and readable.
 - **All Playlists Baseline Overview**: Dispatched on first run or on demand (`curo notify send --all`). Provides an executive summary of all personal playlists, track counts, and availability health.
 - **Supported SMTP Configurations**:
   - Direct TLS / SSL (Port 465).
@@ -445,7 +446,7 @@ curo job cron-help                              # Generate Linux crontab syntax
 
 ### Notifications (`curo notify`)
 ```bash
-curo notify config --host <smtp> --port <port> [--tls/--ssl] --user <user> --password <pass> --to-addr <email>
+curo notify config --host <smtp> --port <port> [--tls/--ssl] --user <user> --password <pass> --to-addr <email> [--exclude-megamix-diff/--include-megamix-diff]
 curo notify test                # Verify SMTP delivery
 curo notify send [--all]        # Dispatch notification manually
 ```

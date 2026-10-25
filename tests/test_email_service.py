@@ -161,8 +161,8 @@ def test_render_changes_digest_shows_diff_and_version(temp_config: ConfigManager
 
     modified_playlists = [
         {
-            "name": "Daily Megamix",
-            "playlist_name": "Daily Megamix",
+            "name": "Rock Classics",
+            "playlist_name": "Rock Classics",
             "version": 3,
             "track_diff": {
                 "added_tracks": [
@@ -180,13 +180,67 @@ def test_render_changes_digest_shows_diff_and_version(temp_config: ConfigManager
     html_body, text_body = service.render_changes_digest(modified_playlists)
 
     assert "Musicae Curo" in html_body
-    assert "Daily Megamix" in html_body
+    assert "Rock Classics" in html_body
     assert "New Track A" in html_body
     assert "Dropped Track X" in html_body
 
-    assert "Daily Megamix" in text_body
+    assert "Rock Classics" in text_body
     assert "+ Added: New Track A by Artist A" in text_body
     assert "- Removed: Dropped Track X by Artist X" in text_body
+
+
+def test_render_changes_digest_excludes_exhaustive_diff_for_megamix(temp_config: ConfigManager):
+    service = EmailService(cfg=temp_config)
+
+    megamix_playlist = [
+        {
+            "name": "Daily Megamix",
+            "playlist_name": "Daily Megamix",
+            "version": 4,
+            "track_count": 120,
+            "track_diff": {
+                "added_tracks": [
+                    {"title": f"Added Track {i}", "artist": f"Artist {i}"} for i in range(1, 121)
+                ],
+                "removed_tracks": [
+                    {"title": f"Removed Track {i}", "artist": f"Old Artist {i}"} for i in range(1, 119)
+                ],
+            },
+            "unavailable_tracks": [
+                {"title": "Unavailable Song", "artist": "Retired Artist"}
+            ],
+            "new_alerts_count": 1,
+        }
+    ]
+
+    # Default: exclude_megamix_diff is True
+    html_body, text_body = service.render_changes_digest(megamix_playlist)
+
+    # Exhaustive 120-item listing must NOT be present
+    assert "Added Track 50" not in html_body
+    assert "Removed Track 50" not in html_body
+    assert "Added Track 50" not in text_body
+    assert "Removed Track 50" not in text_body
+
+    # Compact summary must be present
+    assert "Daily mix refreshed with 120 tracks" in html_body
+    assert "Detailed track listing omitted" in html_body
+    assert "Daily mix refreshed with 120 tracks" in text_body
+    assert "detailed track list omitted" in text_body
+
+    # Unavailable track alert should still be clearly shown
+    assert "Unavailable Song" in html_body
+    assert "Unavailable Song by Retired Artist" in text_body
+
+    # When explicitly disabled: should render exhaustive listing
+    cfg = service.email_config.model_copy()
+    cfg.exclude_megamix_diff = False
+    service.email_config = cfg
+
+    html_full, text_full = service.render_changes_digest(megamix_playlist)
+    assert "Added Track 50" in html_full
+    assert "Removed Track 50" in html_full
+    assert "+ Added: Added Track 50 by Artist 50" in text_full
 
 
 def test_send_digest_notification_first_run_vs_subsequent(temp_config: ConfigManager):

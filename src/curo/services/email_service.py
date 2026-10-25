@@ -22,6 +22,37 @@ class EmailService:
         self.config = cfg or config_manager
         self.email_config = self.config.get_email_config()
 
+    def _get_megamix_playlist_names(self) -> set[str]:
+        """Collect all known megamix target playlist names from jobs configuration."""
+        names = {"daily megamix", "daily fresh megamix"}
+        try:
+            if self.config.jobs_file.exists():
+                import yaml
+
+                with open(self.config.jobs_file, "r", encoding="utf-8") as f:
+                    data = yaml.safe_load(f) or {}
+                jobs = data.get("jobs", {})
+                for job in jobs.values():
+                    actions = job.get("actions", [])
+                    for act in actions:
+                        if act.get("action") == "create_megamix":
+                            tgt = act.get("params", {}).get("target_playlist")
+                            if tgt:
+                                names.add(str(tgt).lower().strip())
+        except Exception as e:
+            logger.debug(f"Could not load jobs.yaml for megamix names: {e}")
+        return names
+
+    def is_megamix_playlist(self, playlist_name: str) -> bool:
+        """Determine whether a playlist represents an automated megamix or daily mix."""
+        if not playlist_name:
+            return False
+        lower = playlist_name.lower().strip()
+        if "megamix" in lower or "daily mix" in lower:
+            return True
+        known_names = self._get_megamix_playlist_names()
+        return lower in known_names
+
     def send_email(
         self,
         subject: str,
@@ -330,29 +361,59 @@ Dispatched automatically by Musicae Curo.
 
         modified_blocks_html = []
         for pl in modified_playlists:
-            p_name = html.escape(str(pl.get("playlist_name", "Untitled Playlist")))
+            raw_p_name = str(pl.get("playlist_name") or pl.get("name") or "Untitled Playlist")
+            p_name = html.escape(raw_p_name)
             ver = pl.get("version", 1)
+            t_count = pl.get("track_count", pl.get("total_tracks", 0))
             t_diff = pl.get("track_diff", {})
             added = t_diff.get("added_tracks", [])
             removed = t_diff.get("removed_tracks", [])
             reordered = t_diff.get("reordered", False)
+            unavail = pl.get("unavailable_tracks", [])
+
+            is_megamix = self.is_megamix_playlist(raw_p_name) and self.email_config.exclude_megamix_diff
 
             diff_items = []
-            for t in added:
-                title = html.escape(str(t.get("title", "Unknown Title")))
-                art = html.escape(str(t.get("artist", "")))
-                diff_items.append(f'<li style="color: #15803d; margin-bottom: 4px;"><strong>+ Added:</strong> {title} {f"by {art}" if art else ""}</li>')
-            for t in removed:
-                title = html.escape(str(t.get("title", "Unknown Title")))
-                art = html.escape(str(t.get("artist", "")))
-                diff_items.append(f'<li style="color: #b91c1c; margin-bottom: 4px;"><strong>- Removed:</strong> {title} {f"by {art}" if art else ""}</li>')
-            if reordered and not added and not removed:
-                diff_items.append('<li style="color: #d97706; margin-bottom: 4px;"><strong>~ Reordered:</strong> Track sequence updated.</li>')
+            if is_megamix:
+                diff_items.append(
+                    f'<li style="color: #64748b; margin-bottom: 4px;">'
+                    f'<em>Daily mix refreshed with {t_count} tracks (+{len(added)} added, -{len(removed)} removed). Detailed track listing omitted.</em>'
+                    f'</li>'
+                )
+                for u in unavail:
+                    u_title = html.escape(str(u.get("title", u.get("track_title", "Unknown Title"))))
+                    u_art = html.escape(str(u.get("artist", u.get("artist_name", ""))))
+                    diff_items.append(
+                        f'<li style="color: #b91c1c; margin-bottom: 4px;">'
+                        f'<strong>! Unavailable:</strong> {u_title} {f"by {u_art}" if u_art else ""}</li>'
+                    )
+            else:
+                for t in added:
+                    title = html.escape(str(t.get("title", "Unknown Title")))
+                    art = html.escape(str(t.get("artist", "")))
+                    diff_items.append(f'<li style="color: #15803d; margin-bottom: 4px;"><strong>+ Added:</strong> {title} {f"by {art}" if art else ""}</li>')
+                for t in removed:
+                    title = html.escape(str(t.get("title", "Unknown Title")))
+                    art = html.escape(str(t.get("artist", "")))
+                    diff_items.append(f'<li style="color: #b91c1c; margin-bottom: 4px;"><strong>- Removed:</strong> {title} {f"by {art}" if art else ""}</li>')
+                if reordered and not added and not removed:
+                    diff_items.append('<li style="color: #d97706; margin-bottom: 4px;"><strong>~ Reordered:</strong> Track sequence updated.</li>')
+                for u in unavail:
+                    u_title = html.escape(str(u.get("title", u.get("track_title", "Unknown Title"))))
+                    u_art = html.escape(str(u.get("artist", u.get("artist_name", ""))))
+                    diff_items.append(
+                        f'<li style="color: #b91c1c; margin-bottom: 4px;">'
+                        f'<strong>! Unavailable:</strong> {u_title} {f"by {u_art}" if u_art else ""}</li>'
+                    )
+
+            badge_html = ""
+            if is_megamix:
+                badge_html = ' <span style="font-size: 11px; background-color: #f1f5f9; color: #475569; padding: 2px 6px; border-radius: 4px; font-weight: normal;">Daily Mix</span>'
 
             modified_blocks_html.append(f"""
             <div style="margin-bottom: 16px; padding: 14px 16px; background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;">
               <div style="font-weight: 600; font-size: 15px; color: #0f172a; margin-bottom: 8px;">
-                {p_name} <span style="font-size: 12px; color: #64748b; font-weight: normal;">(v{ver})</span>
+                {p_name} <span style="font-size: 12px; color: #64748b; font-weight: normal;">(v{ver})</span>{badge_html}
               </div>
               <ul style="margin: 0; padding-left: 20px; font-size: 13px;">
                 {''.join(diff_items)}
@@ -410,12 +471,35 @@ Dispatched automatically by Musicae Curo.
             "",
         ]
         for pl in modified_playlists:
-            lines.append(f"* {pl.get('playlist_name')} (v{pl.get('version', 1)}):")
+            raw_p_name = str(pl.get("playlist_name") or pl.get("name") or "Untitled Playlist")
+            ver = pl.get("version", 1)
+            t_count = pl.get("track_count", pl.get("total_tracks", 0))
             t_diff = pl.get("track_diff", {})
-            for t in t_diff.get("added_tracks", []):
-                lines.append(f"  + Added: {t.get('title')} by {t.get('artist')}")
-            for t in t_diff.get("removed_tracks", []):
-                lines.append(f"  - Removed: {t.get('title')} by {t.get('artist')}")
+            added = t_diff.get("added_tracks", [])
+            removed = t_diff.get("removed_tracks", [])
+            unavail = pl.get("unavailable_tracks", [])
+
+            is_megamix = self.is_megamix_playlist(raw_p_name) and self.email_config.exclude_megamix_diff
+
+            if is_megamix:
+                lines.append(f"* {raw_p_name} (v{ver}) [Daily Mix]:")
+                lines.append(f"  ~ Daily mix refreshed with {t_count} tracks (+{len(added)} added, -{len(removed)} removed; detailed track list omitted)")
+                for u in unavail:
+                    u_title = u.get("title", u.get("track_title", "Unknown Title"))
+                    u_art = u.get("artist", u.get("artist_name", ""))
+                    lines.append(f"  ! Unavailable: {u_title} {f'by {u_art}' if u_art else ''}")
+            else:
+                lines.append(f"* {raw_p_name} (v{ver}):")
+                for t in added:
+                    lines.append(f"  + Added: {t.get('title')} by {t.get('artist')}")
+                for t in removed:
+                    lines.append(f"  - Removed: {t.get('title')} by {t.get('artist')}")
+                if t_diff.get("reordered") and not added and not removed:
+                    lines.append("  ~ Reordered: Track sequence updated.")
+                for u in unavail:
+                    u_title = u.get("title", u.get("track_title", "Unknown Title"))
+                    u_art = u.get("artist", u.get("artist_name", ""))
+                    lines.append(f"  ! Unavailable: {u_title} {f'by {u_art}' if u_art else ''}")
             lines.append("")
 
         lines.extend([
