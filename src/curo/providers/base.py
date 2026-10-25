@@ -13,6 +13,10 @@ class ProviderStub(MusicProvider):
     _name: str = "stub"
     _display_name: str = "Stub"
 
+    def __init__(self, cfg: Optional[Any] = None, **kwargs: Any) -> None:
+        self.config = cfg
+        self._kwargs = kwargs
+
     @property
     def name(self) -> str:
         return self._name
