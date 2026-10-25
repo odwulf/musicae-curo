@@ -170,7 +170,87 @@ Musicae Curo includes a built-in notification engine (`curo notify`) for headles
 
 ---
 
-## 7. CLI Command Reference
+## 7. Declarative Jobs & Automated Scheduling (`jobs.yaml`)
+
+Musicae Curo provides a headless job runner (`JobRunner`) designed for unattended batch routines, such as nightly backups, discovery mix archiving, and playlist health audits.
+
+### How Jobs Work
+Jobs are defined declaratively in a YAML file located at `~/.config/curo/jobs.yaml`. 
+- When `curo job run <name>` is executed, `JobRunner` loads the job definition, resolves the target music provider, and executes each action step sequentially.
+- If any action fails, the runner halts and logs the error, ensuring partially executed jobs do not leave silent failures.
+- If `~/.config/curo/jobs.yaml` does not exist, `curo` automatically generates a default file with standard production routines on first run.
+
+### Structure of `jobs.yaml`
+
+```yaml
+jobs:
+  <job-name>:
+    description: "Human-readable summary of what the job does"
+    actions:
+      - action: <action_type>
+        params:
+          <param_name>: <param_value>
+```
+
+### Supported Action Types & Parameters
+
+| Action Type | Description | Available Parameters |
+| :--- | :--- | :--- |
+| `backup_daily_discovery` | Archives today's algorithmic Daily Discovery mix into a dated playlist. | - `playlist_name_format` (default: `"Discovery Backup - {date}"`)<br>- `description` (optional custom playlist description) |
+| `create_megamix` | Merges Daily Discovery and all active Daily Mixes into a single deduplicated, shuffled playlist. | - `target_playlist` (default: `"Daily Megamix"`)<br>- `include_discovery` (bool, default: `true`)<br>- `include_daily_mixes` (bool, default: `true`)<br>- `shuffle` (bool, default: `true`)<br>- `mode` (`replace` or `append`, default: `replace`)<br>- `description` (template string)<br>- `limit` (optional integer limit) |
+| `snapshot_all_playlists` | Runs SHA-256 versioned snapshots across all personal playlists, updates track history registry, checks track availability, and sends email notifications. | - `alert_on_unavailable` (bool, default: `true`)<br>- `notify` (bool, default: `true`)<br>- `force_all_mail` (bool, default: `false`) |
+| `snapshot_playlist` | Takes a versioned snapshot of a single designated playlist. | - `playlist` (required: playlist title or ID)<br>- `alert_on_unavailable` (bool, default: `true`) |
+| `export_playlist` | Exports a designated playlist to disk in the specified format. | - `playlist` (required: playlist title or ID)<br>- `format` (`json`, `m3u8`, or `csv`, default: `json`) |
+
+### Default Shipped Jobs
+
+When first initialized, `curo` configures two standard jobs:
+
+```yaml
+jobs:
+  daily-discovery-megamix:
+    description: "Backup all daily mixes and build a randomized daily megamix"
+    actions:
+      - action: backup_daily_discovery
+        params:
+          playlist_name_format: "Discovery Backup - {date}"
+          description: "Automated daily backup of Daily Discovery"
+      - action: create_megamix
+        params:
+          target_playlist: "Daily Megamix"
+          include_discovery: true
+          include_daily_mixes: true
+          shuffle: true
+          mode: "replace"
+          description: "All daily mix tunes in random order - updated on {date}"
+
+  daily-playlist-backup:
+    description: "Daily versioned snapshot of all personal playlists with availability alerts"
+    actions:
+      - action: snapshot_all_playlists
+        params:
+          alert_on_unavailable: true
+          notify: true
+```
+
+### Scheduling with Linux `cron` or Task Scheduler
+
+Musicae Curo can automatically output the correct crontab entry for any declared job:
+
+```bash
+# Print ready-to-copy crontab line using current Python interpreter
+curo job cron-help --job daily-discovery-megamix
+```
+
+Example crontab entry:
+```crontab
+# Run daily at 06:00 UTC with progress bars suppressed and logs piped to cron.log
+0 6 * * * /usr/bin/python3 -m curo.cli job run daily-discovery-megamix --quiet >> ~/.config/curo/cron.log 2>&1
+```
+
+---
+
+## 8. CLI Command Reference
 
 ### Global Options
 - `-c, --config <path>`: Custom configuration directory (default: `~/.config/curo`).
