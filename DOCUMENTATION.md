@@ -193,10 +193,73 @@ tidal-cli playlist show "d6b5e00b-..."
 # Create a new playlist
 tidal-cli playlist create "Weekend Grooves" --desc "Hand-picked tracks" --public
 
-# Export playlist to file
-tidal-cli playlist export "Daily Megamix" --format m3u8 --output ~/megamix.m3u8
+# Export playlist with full container & track metadata to JSON, M3U8, or CSV
 tidal-cli playlist export "Daily Megamix" --format json --output ~/megamix.json
+tidal-cli playlist export "Daily Megamix" --format m3u8 --output ~/megamix.m3u8
 tidal-cli playlist export "Daily Megamix" --format csv --output ~/megamix.csv
+```
+
+---
+
+### `album` Subcommands
+```bash
+# Show album details and track list by Album ID or title
+tidal-cli album show "Abbey Road"
+tidal-cli album show "123456"
+
+# Export album with full container & track metadata to JSON
+tidal-cli album export "Abbey Road" --format json --output ~/abbey_road.json
+
+# Export album to M3U8 or CSV
+tidal-cli album export 123456 --format m3u8 --output ~/album.m3u8
+tidal-cli album export 123456 --format csv --output ~/album.csv
+```
+
+#### Exported JSON Metadata Structure
+When exporting a playlist or album to `json`, the output includes all high-level container fields and comprehensive metadata for every included track:
+
+```json
+{
+  "type": "album", // or "playlist"
+  "id": 123456,
+  "name": "Album Title",
+  "version": "Remastered",
+  "duration_seconds": 2600,
+  "num_tracks": 14,
+  "release_date": "1975-11-21",
+  "upc": "00602527718021",
+  "audio_quality": "HI_RES_LOSSLESS",
+  "audio_modes": ["STEREO", "DOLBY_ATMOS"],
+  "artist": { "id": 1001, "name": "Artist Name" },
+  "artists": [{ "id": 1001, "name": "Artist Name", "type": "MAIN" }],
+  "listen_url": "https://tidal.com/browse/album/123456",
+  "tracks": [
+    {
+      "id": 555666,
+      "name": "Track Name",
+      "full_name": "Track Name (2011 Remaster)",
+      "duration_seconds": 354,
+      "track_number": 1,
+      "volume_number": 1,
+      "isrc": "GBUM71029604",
+      "explicit": false,
+      "popularity": 95,
+      "audio_quality": "LOSSLESS",
+      "audio_modes": ["STEREO"],
+      "is_lossless": true,
+      "is_hi_res_lossless": false,
+      "is_dolby_atmos": false,
+      "bpm": 72,
+      "key": "Bb",
+      "replay_gain": -9.2,
+      "peak": 0.99,
+      "copyright": "(C) 2011 Record Label",
+      "artist": { "id": 1001, "name": "Artist Name" },
+      "album": { "id": 123456, "name": "Album Title", "release_date": "1975-11-21" },
+      "listen_url": "https://tidal.com/browse/track/555666"
+    }
+  ]
+}
 ```
 
 ---

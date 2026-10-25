@@ -14,6 +14,7 @@ from rich.table import Table
 
 from tidal_cli.auth import AuthenticationError, SessionManager
 from tidal_cli.config import ConfigManager, config_manager
+from tidal_cli.services.album_service import AlbumService
 from tidal_cli.services.job_runner import JobExecutionError, JobRunner
 from tidal_cli.services.mix_service import MixService
 from tidal_cli.services.playlist_service import PlaylistService
@@ -25,12 +26,14 @@ app = typer.Typer(
 )
 
 auth_app = typer.Typer(name="auth", help="Manage TIDAL authentication and sessions.")
-playlist_app = typer.Typer(name="playlist", help="Inspect, create, and export playlists.")
+playlist_app = typer.Typer(name="playlist", help="Inspect, create, and export playlists with metadata.")
+album_app = typer.Typer(name="album", help="Inspect and export albums with full metadata.")
 mix_app = typer.Typer(name="mix", help="Daily discovery archiving and randomized megamix routines.")
 job_app = typer.Typer(name="job", help="Manage and execute automated cron jobs.")
 
 app.add_typer(auth_app)
 app.add_typer(playlist_app)
+app.add_typer(album_app)
 app.add_typer(mix_app)
 app.add_typer(job_app)
 
@@ -257,6 +260,79 @@ def playlist_export(
     if output:
         output.write_text(content, encoding="utf-8")
         console.print(f"[green]Exported to {output}[/green]")
+    else:
+        console.print(content)
+
+
+# ---------------------------------------------------------------------------
+# Album Commands
+# ---------------------------------------------------------------------------
+@album_app.command("show")
+def album_show(
+    identifier: str = typer.Argument(..., help="Album ID or Album Title"),
+) -> None:
+    """Display album details and track list."""
+    mgr = SessionManager(state["config"])
+    try:
+        session = mgr.load_session()
+        svc = AlbumService(session)
+        alb = svc.get_album(identifier)
+        if not alb:
+            err_console.print(f"[bold red]Album not found:[/bold red] {identifier}")
+            raise typer.Exit(code=1)
+        tracks = alb.tracks()
+    except Exception as e:
+        err_console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    if state["json_mode"]:
+        from tidal_cli.services.metadata_serializer import serialize_album
+        console.print_json(data=serialize_album(alb, tracks))
+        return
+
+    artist_name = getattr(getattr(alb, "artist", None), "name", "Unknown Artist")
+    release_date = getattr(alb, "release_date", "") or ""
+    table = Table(
+        title=f"Album: {alb.name} by {artist_name} ({release_date}) - {len(tracks)} tracks",
+        border_style="magenta",
+    )
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Title", style="bold")
+    table.add_column("Duration", justify="right")
+    table.add_column("ISRC", style="dim")
+
+    for idx, t in enumerate(tracks, 1):
+        dur_secs = getattr(t, "duration", 0)
+        dur_str = f"{dur_secs // 60}:{dur_secs % 60:02d}"
+        table.add_row(
+            str(getattr(t, "track_num", idx)),
+            t.name,
+            dur_str,
+            getattr(t, "isrc", "") or "",
+        )
+
+    console.print(table)
+
+
+@album_app.command("export")
+def album_export(
+    identifier: str = typer.Argument(..., help="Album ID or Album Title"),
+    format: str = typer.Option("json", "--format", "-f", help="Format: json, m3u8, or csv"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="File to write export to"),
+) -> None:
+    """Export album with all container and track metadata to JSON (or m3u8/csv)."""
+    mgr = SessionManager(state["config"])
+    try:
+        session = mgr.load_session()
+        svc = AlbumService(session)
+        content = svc.export_album(identifier, export_format=format)
+    except Exception as e:
+        err_console.print(f"[bold red]Export failed:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    if output:
+        output.write_text(content, encoding="utf-8")
+        console.print(f"[green]Exported album to {output}[/green]")
     else:
         console.print(content)
 
