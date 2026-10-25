@@ -349,6 +349,173 @@ class SnapshotService:
             "track_diff": track_diff,
         }
 
+    def snapshot_favorite_tracks(
+        self,
+        alert_on_unavailable: bool = True,
+    ) -> Dict[str, Any]:
+        """Save versioned snapshot of all favorite/liked tracks if modified, and check for delisted tracks."""
+        self._ensure_dirs()
+        if not self.provider:
+            raise RuntimeError("An active MusicProvider is required to snapshot favorite tracks.")
+
+        tracks = self.provider.get_favorite_tracks()
+        slug = f"favorites_{self.provider.name}"
+        fav_dir = self.snapshots_dir / slug
+        fav_dir.mkdir(parents=True, exist_ok=True)
+        manifest_file = fav_dir / "manifest.json"
+
+        manifest: Dict[str, Any] = {}
+        if manifest_file.exists():
+            try:
+                with open(manifest_file, "r", encoding="utf-8") as f:
+                    manifest = json.load(f) or {}
+            except Exception as e:
+                logger.warning(f"Failed to load manifest at {manifest_file}: {e}")
+
+        last_hash = manifest.get("last_content_hash", "")
+        current_hash = self._compute_content_hash(tracks)
+        has_changed = (current_hash != last_hash)
+
+        snapshots_list: List[Dict[str, Any]] = manifest.get("snapshots", [])
+        last_snapshot_exists = bool(snapshots_list and (fav_dir / snapshots_list[-1]["filename"]).exists())
+
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        timestamp_str = now_utc.strftime("%Y-%m-%dT%H%M%SZ")
+        snapshot_filename = f"{timestamp_str}.json"
+        snapshot_path = fav_dir / snapshot_filename
+
+        self.update_track_registry(tracks, slug)
+
+        unavailable_tracks = []
+        newly_unavailable_alerts = []
+        for idx, t in enumerate(tracks):
+            if not is_track_available(t):
+                hist = self.get_historical_track(t.id) or {}
+                unavail_info = {
+                    "index": idx,
+                    "id": getattr(t, "id", None),
+                    "title": getattr(t, "name", None) or getattr(t, "title", "Unknown"),
+                    "artist": getattr(getattr(t, "artist", None), "name", "Unknown Artist"),
+                    "isrc": getattr(t, "isrc", None) or hist.get("isrc"),
+                    "album_upc": (
+                        getattr(getattr(t, "album", None), "upc", None) or hist.get("album_upc")
+                    ),
+                    "historical_available_at": hist.get("last_available_at"),
+                }
+                unavailable_tracks.append(unavail_info)
+
+                if alert_on_unavailable:
+                    alert = self.log_availability_alert(
+                        track=t,
+                        playlist_title=f"Favorite Tracks ({self.provider.display_name})",
+                        playlist_id=slug,
+                        index=idx,
+                    )
+                    newly_unavailable_alerts.append(alert)
+
+        track_diff = {"added_tracks": [], "removed_tracks": [], "reordered": False}
+        if snapshots_list and (fav_dir / snapshots_list[-1]["filename"]).exists():
+            try:
+                with open(fav_dir / snapshots_list[-1]["filename"], "r", encoding="utf-8") as f:
+                    prev_data = json.load(f)
+                    prev_tracks = prev_data.get("tracks", [])
+                    prev_ids = [str(t.get("id")) for t in prev_tracks if t.get("id")]
+                    curr_ids = [str(getattr(t, "id", "")) for t in tracks if getattr(t, "id", None)]
+
+                    prev_set = set(prev_ids)
+                    curr_set = set(curr_ids)
+
+                    added_ids = curr_set - prev_set
+                    removed_ids = prev_set - curr_set
+
+                    for t in tracks:
+                        if str(getattr(t, "id", "")) in added_ids:
+                            track_diff["added_tracks"].append({
+                                "id": getattr(t, "id", None),
+                                "title": getattr(t, "name", None) or getattr(t, "title", ""),
+                                "artist": getattr(getattr(t, "artist", None), "name", ""),
+                            })
+
+                    for t in prev_tracks:
+                        if str(t.get("id")) in removed_ids:
+                            track_diff["removed_tracks"].append({
+                                "id": t.get("id"),
+                                "title": t.get("title") or t.get("name", ""),
+                                "artist": getattr(t.get("artist"), "get", lambda k, d="": d)("name") if isinstance(t.get("artist"), dict) else "",
+                            })
+
+                    if not added_ids and not removed_ids and prev_ids != curr_ids:
+                        track_diff["reordered"] = True
+            except Exception as e:
+                logger.debug(f"Failed to compute track diff for '{slug}': {e}")
+
+        saved_path = None
+        if has_changed or not last_snapshot_exists:
+            from curo.core.models import Playlist as DomainPlaylist
+            dummy_pl = DomainPlaylist(
+                id=slug,
+                title=f"Favorite Tracks ({self.provider.display_name})",
+                provider=self.provider.name,
+                description=f"Favorite tracks for {self.provider.display_name}",
+                is_public=False,
+                track_count=len(tracks),
+            )
+            full_data = serialize_playlist(dummy_pl, tracks)
+            full_data["content_hash"] = current_hash
+            full_data["snapshot_created_at"] = now_utc.isoformat()
+            full_data["version"] = len(snapshots_list) + 1
+
+            with open(snapshot_path, "w", encoding="utf-8") as f:
+                json.dump(full_data, f, indent=2, ensure_ascii=False)
+
+            manifest["playlist_id"] = slug
+            manifest["playlist_name"] = f"Favorite Tracks ({self.provider.display_name})"
+            manifest["playlist_slug"] = slug
+            manifest["provider"] = self.provider.name
+            manifest["last_content_hash"] = current_hash
+            manifest["last_snapshot_at"] = now_utc.isoformat()
+
+            new_snapshot_record = {
+                "version": len(snapshots_list) + 1,
+                "timestamp": now_utc.isoformat(),
+                "filename": snapshot_filename,
+                "content_hash": current_hash,
+                "track_count": len(tracks),
+                "unavailable_count": len(unavailable_tracks),
+            }
+            snapshots_list.append(new_snapshot_record)
+            manifest["snapshots"] = snapshots_list
+
+            with open(manifest_file, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+            saved_path = str(snapshot_path)
+            logger.info(
+                f"Saved snapshot v{new_snapshot_record['version']} for Favorite Tracks ({len(tracks)} tracks)"
+            )
+
+        is_created = bool(has_changed or not last_snapshot_exists)
+        return {
+            "id": slug,
+            "playlist_id": slug,
+            "name": f"Favorite Tracks ({self.provider.display_name})",
+            "playlist_name": f"Favorite Tracks ({self.provider.display_name})",
+            "playlist_slug": slug,
+            "provider": self.provider.name,
+            "status": "created" if is_created else "unchanged",
+            "has_changed": has_changed,
+            "content_hash": current_hash,
+            "track_count": len(tracks),
+            "total_tracks": len(tracks),
+            "unavailable_count": len(unavailable_tracks),
+            "unavailable_tracks_count": len(unavailable_tracks),
+            "unavailable_tracks": unavailable_tracks,
+            "new_alerts_count": len(newly_unavailable_alerts),
+            "snapshot_file": saved_path,
+            "version": len(snapshots_list),
+            "track_diff": track_diff,
+        }
+
     def snapshot_all_playlists(
         self,
         alert_on_unavailable: bool = True,

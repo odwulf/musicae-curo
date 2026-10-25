@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import datetime
 import io
 import json
 import logging
@@ -10,7 +11,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from curo.core.models import Playlist, Track
 from curo.core.provider import MusicProvider
-from curo.services.metadata_serializer import serialize_playlist
+from curo.services.metadata_serializer import serialize_playlist, serialize_track
 
 logger = logging.getLogger(__name__)
 
@@ -139,4 +140,98 @@ class PlaylistService:
 
         else:
             raise ValueError(f"Unsupported export format: {export_format}. Use json, m3u8, or csv.")
+
+    def backup_favorites_to_playlist(
+        self,
+        target_playlist: str = "Favorites Backup",
+        mode: str = "replace",
+        description: str = "Automated backup of favorite/liked tracks",
+    ) -> Dict[str, Any]:
+        """Fetch all favorite tracks from provider and mirror them into a user playlist."""
+        favorites = self.provider.get_favorite_tracks()
+        playlist = self.get_or_create_playlist(
+            title=target_playlist,
+            description=description,
+            public=False,
+        )
+        pl_id = getattr(playlist, "id", target_playlist)
+
+        all_fav_ids = [str(t.id) for t in favorites if t and t.id]
+
+        if mode == "replace":
+            self.provider.clear_playlist(str(pl_id))
+            tracks_to_add = all_fav_ids
+        else:
+            existing_tracks = self.provider.get_playlist_tracks(str(pl_id))
+            existing_ids = {str(t.id) for t in existing_tracks if t and t.id}
+            tracks_to_add = [tid for tid in all_fav_ids if tid not in existing_ids]
+
+        added = self.add_tracks(playlist=playlist, track_ids=tracks_to_add)
+
+        return {
+            "success": True,
+            "provider": self.provider.name,
+            "target_playlist": target_playlist,
+            "playlist_id": str(pl_id),
+            "mode": mode,
+            "total_favorites": len(favorites),
+            "tracks_added_count": len(tracks_to_add),
+            "tracks_added": added,
+        }
+
+    def export_favorites(self, export_format: str = "json") -> str:
+        """Export favorite tracks in json, m3u8, or csv format."""
+        tracks = self.provider.get_favorite_tracks()
+        fmt = export_format.lower().strip()
+
+        if fmt == "json":
+            serialized_tracks = [serialize_track(t) for t in tracks]
+            data = {
+                "title": "Favorite Tracks",
+                "provider": self.provider.name,
+                "exported_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "track_count": len(tracks),
+                "tracks": serialized_tracks,
+            }
+            return json.dumps(data, indent=2, ensure_ascii=False)
+
+        elif fmt in ("m3u", "m3u8"):
+            lines = ["#EXTM3U", "#PLAYLIST:Favorite Tracks"]
+            for t in tracks:
+                artist = getattr(getattr(t, "artist", None), "name", "Unknown Artist")
+                duration = getattr(t, "duration_seconds", None) or getattr(t, "duration", -1)
+                t_name = getattr(t, "title", None) or getattr(t, "name", "Unknown")
+                lines.append(f"#EXTINF:{duration},{artist} - {t_name}")
+                t_id = getattr(t, "id", "")
+                listen_url = getattr(t, "listen_url", None)
+                if listen_url:
+                    lines.append(str(listen_url))
+                else:
+                    lines.append(f"track://{t_id}")
+            return "\n".join(lines)
+
+        elif fmt == "csv":
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["id", "title", "artist", "album", "duration_seconds", "isrc"])
+            for t in tracks:
+                artist = getattr(getattr(t, "artist", None), "name", "Unknown Artist")
+                alb_obj = getattr(t, "album", None)
+                album = getattr(alb_obj, "name", None) or getattr(alb_obj, "title", "Unknown Album") if alb_obj else "Unknown Album"
+                dur = getattr(t, "duration_seconds", None) or getattr(t, "duration", 0)
+                t_name = getattr(t, "title", None) or getattr(t, "name", "")
+                writer.writerow([
+                    getattr(t, "id", ""),
+                    t_name,
+                    artist,
+                    album,
+                    dur,
+                    getattr(t, "isrc", "") or "",
+                ])
+            return output.getvalue()
+
+        else:
+            raise ValueError(f"Unsupported export format: {export_format}. Use json, m3u8, or csv.")
+
+
 

@@ -52,6 +52,18 @@ jobs:
         params:
           alert_on_unavailable: true
           notify: true
+
+  daily-favorites-backup:
+    description: "Daily versioned snapshot and playlist mirror of all favorite/liked tracks"
+    actions:
+      - action: snapshot_favorite_tracks
+        params:
+          alert_on_unavailable: true
+      - action: backup_favorites_to_playlist
+        params:
+          target_playlist: "Favorites Backup"
+          mode: "replace"
+          description: "Automated daily backup of favorite/liked tracks"
 """
 
 

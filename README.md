@@ -106,7 +106,22 @@ uv run curo playlist snapshot "My Favorites"
 uv run curo playlist alerts
 ```
 
-### 4. Repair or Replace Unavailable Playlist Tracks
+### 4. Backup & Snapshot Favorite Tracks
+```bash
+# List all liked/favorite tracks with seamless pagination (handles full catalog)
+uv run curo favorites list
+
+# Snapshot favorite tracks with cryptographic SHA-256 change detection & alerts
+uv run curo favorites snapshot
+
+# Mirror all favorite tracks into a regular streaming playlist
+uv run curo favorites backup --target "Favorites Backup"
+
+# Export favorites to JSON, M3U8, or CSV
+uv run curo favorites export -f csv -o favorites.csv
+```
+
+### 5. Repair or Replace Unavailable Playlist Tracks
 ```bash
 # Dry-run diagnostic repair report with candidate scoring
 uv run curo playlist repair "My Favorites"
@@ -118,7 +133,7 @@ uv run curo playlist repair "My Favorites" --live
 uv run curo playlist replace "My Favorites" --track "#4" --with USSM18200001 --live
 ```
 
-### 5. Email Notifications (Daily Change Digest & Baseline)
+### 6. Email Notifications (Daily Change Digest & Baseline)
 ```bash
 # Configure SMTP credentials (e.g. port 25 with STARTTLS)
 uv run curo notify config --host mail.myserver.org --port 25 --tls --user me@myserver.org --password secret --to-addr me@myserver.org
@@ -130,7 +145,7 @@ uv run curo notify test
 uv run curo notify send --all
 ```
 
-### 6. Streaming Providers
+### 7. Streaming Providers
 ```bash
 # List available and active provider adapters
 uv run curo provider list
@@ -139,7 +154,7 @@ uv run curo provider list
 uv run curo provider default tidal
 ```
 
-### 7. Headless Linux Server Cron Setup
+### 8. Headless Linux Server Cron Setup
 ```bash
 # Generate the exact crontab syntax for your server
 uv run curo job cron-help

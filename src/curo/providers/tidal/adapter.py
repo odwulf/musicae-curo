@@ -170,6 +170,39 @@ class TidalProvider(MusicProvider):
             updated_at=updated_at,
         )
 
+    # --- Favorites / Liked Songs ---
+    def get_favorite_tracks(self) -> List[Track]:
+        """Fetch all favorite tracks from Tidal with full pagination."""
+        if not self.session.user or not hasattr(self.session.user, "favorites"):
+            return []
+
+        favs = self.session.user.favorites
+        if _is_mock(favs):
+            try:
+                raw = favs.tracks() if callable(favs.tracks) else favs.tracks
+                return [self.to_domain_track(t) for t in (raw or [])]
+            except Exception as e:
+                logger.error(f"Failed to fetch mock favorite tracks: {e}")
+                return []
+
+        all_tracks: List[Track] = []
+        offset = 0
+        limit = 100
+        try:
+            while True:
+                page = favs.tracks(limit=limit, offset=offset)
+                if not page:
+                    break
+                for t in page:
+                    all_tracks.append(self.to_domain_track(t))
+                if len(page) < limit:
+                    break
+                offset += len(page)
+        except Exception as e:
+            logger.error(f"Error fetching Tidal favorite tracks at offset {offset}: {e}")
+            raise
+        return all_tracks
+
     # --- Playlists ---
     def get_user_playlists(self) -> List[Playlist]:
         if not self.session.user:

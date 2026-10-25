@@ -225,6 +225,20 @@ class DeezerProvider(MusicProvider):
             updated_at=None,
         )
 
+    # --- Favorites / Liked Songs ---
+    def get_favorite_tracks(self) -> List[Track]:
+        """Fetch all favorite tracks from Deezer with full pagination."""
+        result: List[Track] = []
+        try:
+            user = self.session.get_user("me")
+            tracks = user.get_tracks() if hasattr(user, "get_tracks") else []
+            for t in tracks:
+                result.append(self.to_domain_track(t))
+        except Exception as e:
+            logger.error(f"Failed to fetch Deezer favorite tracks: {e}")
+            raise
+        return result
+
     # --- Playlists ---
     def get_user_playlists(self) -> List[Playlist]:
         result: List[Playlist] = []
