@@ -779,10 +779,19 @@ class SnapshotService:
         notification_res = None
         if notify:
             try:
+                follower_stats = None
+                if self.provider:
+                    follower_stats = self.update_followers_metrics()
+
                 from curo.services.email_service import EmailService
                 email_svc = EmailService(cfg=self.config)
+                modified = [p for p in results if p.get("has_changed") or p.get("snapshot_file") or p.get("status") == "created"]
+                new_alerts = [a for p in results for a in p.get("unavailable_tracks", []) if p.get("new_alerts_count", 0) > 0]
                 notification_res = email_svc.send_digest_notification(
                     batch_results=batch_result,
+                    modified_playlists=modified,
+                    new_alerts=new_alerts,
+                    follower_stats=follower_stats,
                     force_all=force_all_mail,
                     provider_name=self.provider.display_name,
                 )
@@ -792,3 +801,207 @@ class SnapshotService:
 
         batch_result["notification"] = notification_res
         return batch_result
+
+    def update_followers_metrics(self) -> Dict[str, Any]:
+        """Query and track follower reach for user profile and playlists, computing deltas since previous run."""
+        if not self.provider:
+            return {"profile": None, "playlist_changes": [], "has_changes": False}
+
+        self._ensure_dirs()
+        followers_file = self.snapshots_dir / "followers.json"
+        prev_data: Dict[str, Any] = {}
+        if followers_file.exists():
+            try:
+                with open(followers_file, "r", encoding="utf-8") as f:
+                    prev_data = json.load(f) or {}
+            except Exception as e:
+                logger.warning(f"Failed to load followers history from {followers_file}: {e}")
+
+        # 1. Profile followers
+        user_profile = None
+        if hasattr(self.provider, "get_user_profile"):
+            try:
+                user_profile = self.provider.get_user_profile()
+            except Exception as e:
+                logger.debug(f"Failed to query user profile: {e}")
+
+        curr_p_count = getattr(user_profile, "followers_count", None) if user_profile else None
+        prev_profile_entry = prev_data.get("profile") or {}
+        prev_p_count = prev_profile_entry.get("followers_count")
+
+        delta_p = 0
+        if curr_p_count is not None and prev_p_count is not None:
+            delta_p = curr_p_count - prev_p_count
+
+        # 2. Playlist followers
+        playlists = []
+        try:
+            playlists = self.provider.get_user_playlists() or []
+        except Exception as e:
+            logger.debug(f"Failed to fetch user playlists for followers: {e}")
+
+        playlist_ids = [str(pl.id) for pl in playlists if getattr(pl, "id", None) and not _safe_str(getattr(pl, "id", None)) == ""]
+        foll_map: Dict[str, int] = {}
+        if hasattr(self.provider, "get_playlist_followers") and playlist_ids:
+            try:
+                foll_map = self.provider.get_playlist_followers(playlist_ids) or {}
+            except Exception as e:
+                logger.debug(f"Failed to query playlist followers: {e}")
+
+        prev_playlists = prev_data.get("playlists") or {}
+        playlist_changes = []
+        new_playlists_state: Dict[str, Any] = {}
+
+        for pl in playlists:
+            pid = str(getattr(pl, "id", ""))
+            if not pid or hasattr(pid, "_mock_return_value"):
+                continue
+            p_name = getattr(pl, "name", None) or getattr(pl, "title", "Untitled Playlist")
+            curr_f = foll_map.get(pid)
+            if curr_f is None:
+                curr_f = getattr(pl, "followers_count", None)
+
+            prev_entry = prev_playlists.get(pid) or {}
+            prev_f = prev_entry.get("followers_count")
+
+            delta = 0
+            if curr_f is not None and prev_f is not None:
+                delta = curr_f - prev_f
+                if delta != 0:
+                    playlist_changes.append({
+                        "id": pid,
+                        "name": p_name,
+                        "current": curr_f,
+                        "previous": prev_f,
+                        "delta": delta,
+                    })
+
+            new_playlists_state[pid] = {
+                "name": p_name,
+                "followers_count": curr_f,
+            }
+
+        now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        current_data = {
+            "last_updated": now_iso,
+            "provider": self.provider.name,
+            "profile": {
+                "id": getattr(user_profile, "id", None) if user_profile else None,
+                "username": getattr(user_profile, "username", None) if user_profile else None,
+                "display_name": getattr(user_profile, "display_name", None) if user_profile else None,
+                "followers_count": curr_p_count,
+            },
+            "playlists": new_playlists_state,
+        }
+
+        try:
+            with open(followers_file, "w", encoding="utf-8") as f:
+                json.dump(current_data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.warning(f"Failed to save followers history to {followers_file}: {e}")
+
+        total_reach = sum(v for v in foll_map.values() if v is not None and isinstance(v, (int, float)))
+        return {
+            "profile": {
+                "id": getattr(user_profile, "id", None) if user_profile else None,
+                "username": getattr(user_profile, "username", None) if user_profile else None,
+                "display_name": getattr(user_profile, "display_name", None) if user_profile else None,
+                "current_followers": curr_p_count,
+                "previous_followers": prev_p_count,
+                "delta": delta_p,
+            },
+            "playlist_changes": playlist_changes,
+            "total_playlist_followers": total_reach,
+            "has_changes": bool(delta_p != 0 or len(playlist_changes) > 0),
+        }
+
+    def send_daily_digest(
+        self,
+        force: bool = False,
+        provider_name: Optional[str] = None,
+        include_followers: bool = True,
+    ) -> Dict[str, Any]:
+        """Aggregate daily playlist changes, unavailable alerts, and follower reach, and dispatch unified email digest."""
+        self._ensure_dirs()
+        prov_name = provider_name or (self.provider.display_name if self.provider else "Music Provider")
+
+        # 1. Follower metrics
+        follower_stats = None
+        if include_followers and self.provider:
+            follower_stats = self.update_followers_metrics()
+
+        # 2. Gather modified playlists and baseline summary from local manifests
+        all_playlists_summary: List[Dict[str, Any]] = []
+        modified_playlists: List[Dict[str, Any]] = []
+
+        now_utc = datetime.datetime.now(datetime.timezone.utc)
+        today_date_str = now_utc.strftime("%Y-%m-%d")
+
+        for child in self.snapshots_dir.iterdir():
+            if child.is_dir() and (child / "manifest.json").exists():
+                try:
+                    with open(child / "manifest.json", "r", encoding="utf-8") as f:
+                        manifest = json.load(f) or {}
+                    pl_name = manifest.get("playlist_name", child.name)
+                    snaps = manifest.get("snapshots", [])
+                    if not snaps:
+                        continue
+                    last_snap = snaps[-1]
+                    snap_file = child / last_snap.get("filename", "")
+
+                    pl_summary = {
+                        "playlist_id": manifest.get("playlist_id", child.name),
+                        "playlist_name": pl_name,
+                        "playlist_slug": manifest.get("playlist_slug", child.name),
+                        "track_count": last_snap.get("track_count", 0),
+                        "unavailable_count": last_snap.get("unavailable_count", 0),
+                        "version": last_snap.get("version", len(snaps)),
+                        "last_snapshot_at": last_snap.get("timestamp"),
+                    }
+                    all_playlists_summary.append(pl_summary)
+
+                    if snap_file.exists():
+                        with open(snap_file, "r", encoding="utf-8") as sf:
+                            snap_data = json.load(sf) or {}
+                        snap_created = snap_data.get("snapshot_created_at", "")
+                        if snap_created.startswith(today_date_str) or len(snaps) == 1:
+                            t_diff = snap_data.get("track_diff") or {}
+                            has_diff = bool(
+                                t_diff.get("added_tracks")
+                                or t_diff.get("removed_tracks")
+                                or t_diff.get("relinked_tracks")
+                            )
+                            if has_diff or len(snaps) == 1:
+                                modified_entry = dict(pl_summary)
+                                modified_entry["track_diff"] = t_diff
+                                modified_entry["unavailable_tracks"] = [
+                                    t for t in snap_data.get("tracks", []) if not is_track_available(t)
+                                ]
+                                modified_entry["new_alerts_count"] = last_snap.get("unavailable_count", 0)
+                                modified_playlists.append(modified_entry)
+                except Exception as e:
+                    logger.debug(f"Failed to read snapshot manifest in {child}: {e}")
+
+        # 3. Recent alerts from today
+        recent_alerts = self.get_recent_alerts(limit=50)
+        today_alerts = [
+            a for a in recent_alerts
+            if str(a.get("timestamp", "")).startswith(today_date_str)
+        ]
+
+        batch_result = {
+            "playlists_scanned": len(all_playlists_summary),
+            "total_alerts": len(today_alerts),
+            "playlists": all_playlists_summary,
+        }
+
+        from curo.services.email_service import EmailService
+        email_svc = EmailService(cfg=self.config)
+        return email_svc.send_digest_notification(
+            batch_results=batch_result,
+            modified_playlists=modified_playlists,
+            new_alerts=today_alerts,
+            follower_stats=follower_stats,
+            force_all=force,
+            provider_name=prov_name,
+        )

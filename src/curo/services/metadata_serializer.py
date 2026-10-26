@@ -201,6 +201,8 @@ def serialize_playlist(playlist: Any, tracks: List[Any]) -> Dict[str, Any]:
         "duration_seconds": _clean_int(dur),
         "num_tracks": len(tracks),
         "track_count": len(tracks),
+        "num_followers": _clean_int(getattr(playlist, "followers_count", None)),
+        "followers_count": _clean_int(getattr(playlist, "followers_count", None)),
         "public": _clean_bool(getattr(playlist, "is_public", False) or getattr(playlist, "public", False)),
         "creator": creator_info,
         "tracks": [serialize_track(t) for t in tracks],

@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Union
 import spotipy
 
 from curo.config import ConfigManager, config_manager
-from curo.core.models import Album, Artist, CuratedMix, Playlist, Track
+from curo.core.models import Album, Artist, CuratedMix, Playlist, Track, UserProfile
 from curo.core.provider import MusicProvider
 from curo.core.registry import ProviderRegistry
 from curo.providers.spotify.session import SpotifySessionManager
@@ -242,6 +242,7 @@ class SpotifyProvider(MusicProvider):
             is_public=is_pub,
             track_count=int(num_tracks),
             duration_seconds=0,
+            followers_count=p.get("followers", {}).get("total") if isinstance(p, dict) and isinstance(p.get("followers"), dict) else None,
             updated_at=None,
         )
 
@@ -525,6 +526,24 @@ class SpotifyProvider(MusicProvider):
         except Exception as e:
             logger.warning(f"Spotify search query failed for '{query}': {e}")
             return []
+
+
+    def get_user_profile(self) -> Optional[UserProfile]:
+        """Fetch authenticated Spotify user profile and follower metrics."""
+        try:
+            me = self.session.current_user()
+            if isinstance(me, dict):
+                folls = me.get("followers", {}).get("total")
+                return UserProfile(
+                    id=str(me.get("id", "")),
+                    username=_clean_str(me.get("id")),
+                    display_name=_clean_str(me.get("display_name")),
+                    provider=self.name,
+                    followers_count=int(folls) if folls is not None else None,
+                )
+        except Exception as e:
+            logger.debug(f"Failed to fetch Spotify user profile: {e}")
+        return None
 
 
 # Automatically register SpotifyProvider in ProviderRegistry

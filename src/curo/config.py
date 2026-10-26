@@ -68,6 +68,14 @@ jobs:
           target_playlist: "Favorites Backup"
           mode: "replace"
           description: "Automated daily backup of favorite/liked tracks"
+
+  daily-digest:
+    description: "Dispatch unified daily email digest with playlist changes, availability alerts, and follower reach"
+    actions:
+      - action: send_daily_digest
+        params:
+          force: false
+          include_followers: true
 """
 
 

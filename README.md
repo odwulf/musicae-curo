@@ -36,8 +36,10 @@ Musicae Curo (*Latin: "I care for music"*) is a modular, provider-agnostic music
   - Explainable 100-point scoring algorithm with detailed reasoning diagnostics.
   - Severe acoustic/live version penalties with manual approval safeguards.
   - Targeted track replacement by Track ID, 1-based position (`#4`), ISRC, or UPC.
-- **Email Notifications & Change Digests**:
-  - HTML & plain-text email digests sent whenever changes or unavailable tracks are detected.
+- **Email Notifications, Social Reach & Change Digests**:
+  - Unified daily HTML & plain-text email digests aggregating playlist changes, relinked tracks, and unavailable track alerts.
+  - **Followers & Social Reach**: Tracks follower gains/losses (+N / -N) for your profile and playlists over time (`snapshots/followers.json`).
+  - **Decoupled Daily Digest**: Standalone `send_daily_digest` action and `curo notify digest` command decouple reporting from mutation jobs, eliminating job ordering hazards.
   - Baseline "All Playlists Overview" report sent automatically on initial setup or on demand (`--all`).
   - Fully configurable SMTP settings including support for port 25, 587 (STARTTLS), or 465 (SSL).
 - **Headless Server & Cron Automation**:
@@ -141,6 +143,9 @@ uv run curo notify config --host mail.myserver.org --port 25 --tls --user me@mys
 
 # Verify SMTP connectivity
 uv run curo notify test
+
+# Dispatch unified daily digest (playlist changes, alerts & follower reach)
+uv run curo notify digest
 
 # Dispatch baseline all-playlists email overview
 uv run curo notify send --all

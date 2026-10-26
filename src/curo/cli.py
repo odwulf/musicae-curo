@@ -1108,6 +1108,32 @@ def notify_send(
         console.print(f"[dim]Notification skipped or not sent: {res.get('reason') or res.get('error')}[/dim]")
 
 
+@notify_app.command("digest")
+def notify_digest(
+    force: bool = typer.Option(False, "--force", "-f", help="Force sending digest even if no changes detected"),
+    include_followers: bool = typer.Option(True, "--followers/--no-followers", help="Include profile and playlist follower reach"),
+    provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
+) -> None:
+    """Send unified daily library and social digest (playlist changes, alerts, followers)."""
+    p = get_active_provider(provider, require_active=True)
+    snap_svc = SnapshotService(p, cfg=state["config"])
+
+    res = snap_svc.send_daily_digest(
+        force=force,
+        provider_name=p.display_name,
+        include_followers=include_followers,
+    )
+
+    if state["json_mode"]:
+        console.print_json(data=res)
+        return
+
+    if res.get("sent"):
+        console.print(f"[bold green]Daily digest dispatched successfully ('{res.get('subject')}').[/bold green]")
+    else:
+        console.print(f"[dim]Daily digest skipped or not sent: {res.get('reason') or res.get('error')}[/dim]")
+
+
 # ---------------------------------------------------------------------------
 # Job Commands
 # ---------------------------------------------------------------------------

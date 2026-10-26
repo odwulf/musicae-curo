@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
-from curo.core.models import Album, CuratedMix, Playlist, Track
+from curo.core.models import Album, CuratedMix, Playlist, Track, UserProfile
 
 
 class MusicProvider(ABC):
@@ -158,5 +158,14 @@ class MusicProvider(ABC):
 
     def get_playlist_track_replacements(self, playlist_id: str) -> Dict[str, str]:
         """Inspect playlist for tracks replaced by provider, returning mapping of original_id to replacement_id."""
+        return {}
+
+    # --- Social Reach & Follower Metrics ---
+    def get_user_profile(self) -> Optional[UserProfile]:
+        """Fetch authenticated user profile details and follower metrics."""
+        return None
+
+    def get_playlist_followers(self, playlist_ids: List[str]) -> Dict[str, int]:
+        """Fetch follower counts for a list of playlist IDs, returning mapping of {playlist_id: count}."""
         return {}
 

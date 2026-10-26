@@ -119,6 +119,11 @@ class JobRunner:
                         notify=params.get("notify", True),
                         force_all_mail=params.get("force_all_mail", False),
                     )
+                elif action_type in ("send_daily_digest", "send_digest", "notify_digest"):
+                    res = snapshot_service.send_daily_digest(
+                        force=params.get("force", params.get("force_all", False)),
+                        include_followers=params.get("include_followers", True),
+                    )
                 elif action_type == "snapshot_playlist":
                     res = snapshot_service.snapshot_playlist(
                         identifier=params["playlist"],

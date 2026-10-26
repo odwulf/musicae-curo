@@ -436,3 +436,48 @@ def test_cli_notify_configure_port_25_with_tls(temp_config: ConfigManager, monke
     assert cfg.use_ssl is False
     assert cfg.to_address == "xave@example.com"
     assert cfg.from_address == "bot@example.com"
+
+
+def test_render_changes_digest_shows_followers_reach(temp_config: ConfigManager):
+    service = EmailService(cfg=temp_config)
+
+    follower_stats = {
+        "profile": {
+            "display_name": "xave",
+            "username": "xavier@plantefeve.fr",
+            "followers_count": 5,
+            "delta": 2,
+        },
+        "playlists": [
+            {
+                "name": "Beatles en français",
+                "followers_count": 12,
+                "delta": 3,
+            },
+            {
+                "name": "Rock Classics",
+                "followers_count": 4,
+                "delta": -1,
+            },
+        ],
+        "total_followers": 21,
+        "total_delta": 4,
+        "has_changes": True,
+    }
+
+    html_body, text_body = service.render_changes_digest([], follower_stats=follower_stats)
+
+    # HTML assertions
+    assert "Followers &amp; Reach" in html_body or "Followers & Reach" in html_body
+    assert "Profile (xave)" in html_body
+    assert "+2" in html_body
+    assert "Beatles en français" in html_body
+    assert "+3" in html_body
+    assert "Rock Classics" in html_body
+    assert "-1" in html_body
+
+    # Plain text assertions
+    assert "Followers & Reach:" in text_body
+    assert "* Profile (xave): 5 followers (+2)" in text_body
+    assert "Beatles en français: 12 followers (+3)" in text_body
+    assert "Rock Classics: 4 followers (-1)" in text_body

@@ -69,6 +69,16 @@ class Track(BaseModel):
         return bool(self.available and self.allow_streaming and self.stream_ready)
 
 
+class UserProfile(BaseModel):
+    """Domain model representing the authenticated user profile and social reach metrics."""
+
+    id: str
+    username: Optional[str] = None
+    display_name: Optional[str] = None
+    provider: str = "unknown"
+    followers_count: Optional[int] = None
+
+
 class Playlist(BaseModel):
     """Domain model representing a curated or user playlist container."""
 
@@ -80,6 +90,7 @@ class Playlist(BaseModel):
     is_owner: bool = True
     track_count: int = 0
     duration_seconds: int = 0
+    followers_count: Optional[int] = None
     updated_at: Optional[datetime] = None
 
     @property

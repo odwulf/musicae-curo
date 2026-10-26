@@ -12,7 +12,7 @@ import tidalapi
 from tidalapi import Album as TidalAlbum, Track as TidalTrack, UserPlaylist
 
 from curo.config import ConfigManager, config_manager
-from curo.core.models import Album, Artist, CuratedMix, Playlist, Track
+from curo.core.models import Album, Artist, CuratedMix, Playlist, Track, UserProfile
 from curo.core.provider import MusicProvider
 from curo.core.registry import ProviderRegistry
 from curo.providers.tidal.session import TidalSessionManager
@@ -649,6 +649,98 @@ class TidalProvider(MusicProvider):
             logger.debug(f"Failed to fetch playlist track replacements for {playlist_id}: {e}")
 
         return replacements
+
+
+    # --- Social Reach & Follower Metrics ---
+    def get_user_profile(self) -> Optional[UserProfile]:
+        """Fetch authenticated Tidal user profile details and follower metrics."""
+        try:
+            s = self.session
+            u = getattr(s, "user", None)
+            if not u:
+                return None
+
+            user_id = str(getattr(u, "id", "") or "")
+            username = _clean_str(getattr(u, "username", ""))
+            first_name = _clean_str(getattr(u, "first_name", ""))
+            last_name = _clean_str(getattr(u, "last_name", ""))
+            display_name = f"{first_name} {last_name}".strip() if (first_name or last_name) else username
+
+            artist_id = None
+            try:
+                meta = u.profile_metadata() if callable(getattr(u, "profile_metadata", None)) else getattr(u, "profile_metadata", None)
+                if isinstance(meta, dict):
+                    artist_id = meta.get("artistId")
+                    if meta.get("profileName"):
+                        display_name = str(meta.get("profileName"))
+            except Exception:
+                pass
+
+            followers_count = None
+            token = getattr(s, "access_token", None)
+            token_type = getattr(s, "token_type", "Bearer") or "Bearer"
+
+            if token and not _is_mock(token) and artist_id:
+                try:
+                    headers = {
+                        "Authorization": f"{token_type} {token}",
+                        "Accept": "application/vnd.api+json",
+                    }
+                    url = f"https://openapi.tidal.com/v2/artists/{artist_id}"
+                    r = requests.get(url, headers=headers, timeout=10)
+                    if r.status_code == 200:
+                        attrs = r.json().get("data", {}).get("attributes", {})
+                        followers_count = attrs.get("numberOfFollowers")
+                        if attrs.get("name"):
+                            display_name = str(attrs.get("name"))
+                except Exception as e:
+                    logger.debug(f"Failed to query Tidal public profile artist #{artist_id}: {e}")
+
+            return UserProfile(
+                id=user_id,
+                username=username,
+                display_name=display_name,
+                provider="tidal",
+                followers_count=followers_count,
+            )
+        except Exception as e:
+            logger.debug(f"Failed to retrieve user profile: {e}")
+            return None
+
+    def get_playlist_followers(self, playlist_ids: List[str]) -> Dict[str, int]:
+        """Fetch follower counts for a list of playlist IDs using Tidal OpenAPI v2 batch filter."""
+        results: Dict[str, int] = {}
+        valid_ids = [str(pid) for pid in playlist_ids if pid and not _is_mock(pid)]
+        if not valid_ids:
+            return results
+
+        try:
+            s = self.session
+            token = getattr(s, "access_token", None)
+            token_type = getattr(s, "token_type", "Bearer") or "Bearer"
+            if not token or _is_mock(token):
+                return results
+
+            headers = {
+                "Authorization": f"{token_type} {token}",
+                "Accept": "application/vnd.api+json",
+            }
+
+            chunk_size = 50
+            for i in range(0, len(valid_ids), chunk_size):
+                chunk = valid_ids[i : i + chunk_size]
+                url = f"https://openapi.tidal.com/v2/playlists?filter[id]={','.join(chunk)}"
+                r = requests.get(url, headers=headers, timeout=10)
+                if r.status_code == 200:
+                    for item in r.json().get("data", []):
+                        pid = str(item.get("id", ""))
+                        cnt = item.get("attributes", {}).get("numberOfFollowers", 0)
+                        if pid:
+                            results[pid] = int(cnt) if cnt is not None else 0
+        except Exception as e:
+            logger.debug(f"Failed to fetch playlist followers batch: {e}")
+
+        return results
 
 
 # Automatically register TidalProvider in ProviderRegistry

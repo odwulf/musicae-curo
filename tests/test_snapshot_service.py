@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -419,3 +419,78 @@ def test_snapshot_reactive_replacement_alerting(temp_config: ConfigManager):
     assert alert["has_provider_replacement"] is True
     assert alert["provider_replacement_id"] == "888888"
     assert "Official replacement available" in alert["message"]
+
+
+def test_update_followers_metrics(temp_config: ConfigManager):
+    mock_provider = MagicMock()
+    mock_provider.name = "tidal"
+
+    mock_profile_run1 = MagicMock()
+    mock_profile_run1.id = "user123"
+    mock_profile_run1.username = "xave@plantefeve.fr"
+    mock_profile_run1.display_name = "xave"
+    mock_profile_run1.followers_count = 1
+
+    pl1 = MagicMock(id="pl-1", followers_count=5)
+    pl1.name = "Beatles en français"
+
+    mock_provider.get_user_profile.return_value = mock_profile_run1
+    mock_provider.get_user_playlists.return_value = [pl1]
+    mock_provider.get_playlist_followers.return_value = {"pl-1": 5}
+
+    service = SnapshotService(provider=mock_provider, cfg=temp_config)
+
+    # First run: initial baseline
+    stats1 = service.update_followers_metrics()
+    assert stats1["profile"]["current_followers"] == 1
+    assert stats1["profile"]["delta"] == 0
+    assert len(stats1["playlist_changes"]) == 0
+    assert stats1["has_changes"] is False
+
+    # Second run: profile gained 2 followers (1 -> 3), playlist gained 2 (5 -> 7)
+    mock_profile_run2 = MagicMock()
+    mock_profile_run2.id = "user123"
+    mock_profile_run2.username = "xave@plantefeve.fr"
+    mock_profile_run2.display_name = "xave"
+    mock_profile_run2.followers_count = 3
+
+    mock_provider.get_user_profile.return_value = mock_profile_run2
+    mock_provider.get_playlist_followers.return_value = {"pl-1": 7}
+
+    stats2 = service.update_followers_metrics()
+    assert stats2["profile"]["current_followers"] == 3
+    assert stats2["profile"]["previous_followers"] == 1
+    assert stats2["profile"]["delta"] == 2
+    assert len(stats2["playlist_changes"]) == 1
+    assert stats2["playlist_changes"][0]["delta"] == 2
+    assert stats2["playlist_changes"][0]["current"] == 7
+    assert stats2["playlist_changes"][0]["previous"] == 5
+    assert stats2["has_changes"] is True
+
+
+def test_send_daily_digest(temp_config: ConfigManager):
+    mock_provider = MagicMock()
+    mock_provider.name = "tidal"
+
+    service = SnapshotService(provider=mock_provider, cfg=temp_config)
+
+    # Mock email service and update_followers_metrics
+    with patch("curo.services.email_service.EmailService") as mock_email_cls:
+        mock_email_instance = MagicMock()
+        mock_email_instance.send_digest_notification.return_value = {"sent": True, "follower_changes": True}
+        mock_email_cls.return_value = mock_email_instance
+
+        # Fake follower stats
+        with patch.object(service, "update_followers_metrics", return_value={
+            "profile": {"display_name": "xave", "current_followers": 5, "delta": 1},
+            "playlist_changes": [],
+            "total_playlist_followers": 10,
+            "has_changes": True,
+        }):
+            res = service.send_daily_digest(force=True)
+
+            assert res["sent"] is True
+            assert res["follower_changes"] is True
+            mock_email_instance.send_digest_notification.assert_called_once()
+            args, kwargs = mock_email_instance.send_digest_notification.call_args
+            assert kwargs["follower_stats"]["profile"]["current_followers"] == 5

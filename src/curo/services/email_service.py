@@ -352,6 +352,7 @@ Dispatched automatically by Musicae Curo.
         all_playlists_summary: Optional[List[Dict[str, Any]]] = None,
         new_alerts: Optional[List[Dict[str, Any]]] = None,
         provider_name: str = "Music Provider",
+        follower_stats: Optional[Dict[str, Any]] = None,
     ) -> tuple[str, str]:
         """Render the email digest when one or more playlists were modified or delisted tracks detected."""
         now_str = datetime.datetime.now(datetime.timezone.utc).strftime("%B %d, %Y - %H:%M UTC")
@@ -497,24 +498,86 @@ Dispatched automatically by Musicae Curo.
         </tr>
       </table>"""
 
+        follower_html = ""
+        follower_text_lines = []
+        if follower_stats:
+            prof = follower_stats.get("profile") or {}
+            p_name = html.escape(str(prof.get("display_name") or prof.get("username") or "Profile"))
+            p_curr = prof.get("current_followers", prof.get("followers_count"))
+            p_delta = prof.get("delta", 0)
+            pl_changes = follower_stats.get("playlist_changes") or follower_stats.get("playlists", [])
+            total_pl_folls = follower_stats.get("total_playlist_followers", follower_stats.get("total_followers", 0))
+
+            social_items = []
+            if p_curr is not None:
+                delta_str = ""
+                if p_delta > 0:
+                    delta_str = f' <span style="display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; background-color: #dcfce7; color: #15803d;">+{p_delta} new</span>'
+                elif p_delta < 0:
+                    delta_str = f' <span style="display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; background-color: #fee2e2; color: #b91c1c;">{p_delta}</span>'
+
+                social_items.append(
+                    f'<li style="margin-bottom: 6px; font-size: 13px;">'
+                    f'<strong>Profile ({p_name}):</strong> {p_curr} follower{"s" if p_curr != 1 else ""}{delta_str}'
+                    f'</li>'
+                )
+                delta_txt = f" (+{p_delta})" if p_delta > 0 else (f" ({p_delta})" if p_delta < 0 else "")
+                follower_text_lines.append(f"* Profile ({prof.get('display_name') or prof.get('username') or 'Profile'}): {p_curr} followers{delta_txt}")
+
+            if pl_changes:
+                for plc in pl_changes:
+                    c_name = html.escape(str(plc.get("name", "Playlist")))
+                    c_curr = plc.get("current", plc.get("followers_count", 0))
+                    c_delta = plc.get("delta", 0)
+                    delta_badge = (
+                        f' <span style="display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; background-color: #dcfce7; color: #15803d;">+{c_delta} new</span>'
+                        if c_delta > 0
+                        else f' <span style="display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; background-color: #fee2e2; color: #b91c1c;">{c_delta}</span>'
+                    )
+                    social_items.append(
+                        f'<li style="margin-bottom: 6px; font-size: 13px;">'
+                        f'Playlist <em>{c_name}</em>: {c_curr} follower{"s" if c_curr != 1 else ""}{delta_badge}'
+                        f'</li>'
+                    )
+                    follower_text_lines.append(f"  * {plc.get('name')}: {c_curr} followers ({'+' if c_delta > 0 else ''}{c_delta})")
+            elif total_pl_folls > 0:
+                social_items.append(
+                    f'<li style="margin-bottom: 6px; font-size: 13px; color: #64748b;">'
+                    f'Total Playlist Reach: {total_pl_folls} followers across public playlists.'
+                    f'</li>'
+                )
+                follower_text_lines.append(f"* Total Playlist Reach: {total_pl_folls} followers")
+
+            if social_items:
+                follower_html = f"""
+      <div style="margin-bottom: 24px; padding: 16px 20px; background-color: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px;">
+        <h3 style="margin: 0 0 10px 0; font-size: 14px; font-weight: 600; color: #166534;">Followers & Reach</h3>
+        <ul style="margin: 0; padding-left: 18px; color: #1e293b;">
+          {''.join(social_items)}
+        </ul>
+      </div>"""
+
+        change_details_content = ''.join(modified_blocks_html) if modified_blocks_html else '<p style="color: #64748b; font-style: italic; margin: 0;">No playlist track modifications detected in this run.</p>'
+
         html_body = f"""<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Musicae Curo • Playlist Digest</title>
+  <title>Musicae Curo • Library & Social Digest</title>
 </head>
 <body style="margin: 0; padding: 24px 12px; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; color: #1e293b;">
   <div style="max-width: 640px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; border: 1px solid #cbd5e1; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.04);">
     <div style="background-color: #0f172a; padding: 24px 28px; border-bottom: 3px solid #00E8E2; color: #ffffff;">
-      <h1 style="margin: 0; font-size: 20px; font-weight: 600;">Musicae Curo • Playlist Change Digest</h1>
+      <h1 style="margin: 0; font-size: 20px; font-weight: 600;">Musicae Curo • Library & Social Digest</h1>
       <p style="margin: 6px 0 0 0; font-size: 13px; color: #94a3b8;">{now_str} • {len(modified_playlists)} playlist(s) modified</p>
     </div>
     <div style="padding: 20px 28px; background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
       {summary_table_html}
     </div>
     <div style="padding: 24px 28px;">
-      <h2 style="margin: 0 0 14px 0; font-size: 16px; font-weight: 600; color: #0f172a;">Change Details</h2>
-      {''.join(modified_blocks_html)}
+      {follower_html}
+      <h2 style="margin: 0 0 14px 0; font-size: 16px; font-weight: 600; color: #0f172a;">Playlist Change Details</h2>
+      {change_details_content}
     </div>
     <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 28px; font-size: 12px; color: #64748b; text-align: center;">
       Automated daily notification by <strong>Musicae Curo</strong>.
@@ -525,11 +588,18 @@ Dispatched automatically by Musicae Curo.
 
         relink_summary_text = f" | Relinked: {total_relinked}" if total_relinked > 0 else ""
         lines = [
-            f"Musicae Curo • Playlist Change Digest ({now_str})",
+            f"Musicae Curo • Library & Social Digest ({now_str})",
             "=" * 50,
             f"Modified Playlists: {len(modified_playlists)} | Added: +{total_added} | Removed: -{total_removed}{relink_summary_text}",
             "",
         ]
+        if follower_text_lines:
+            lines.extend([
+                "Followers & Reach:",
+                "-" * 40,
+                *follower_text_lines,
+                "",
+            ])
         for pl in modified_playlists:
             raw_p_name = str(pl.get("playlist_name") or pl.get("name") or "Untitled Playlist")
             ver = pl.get("version", 1)
@@ -600,19 +670,26 @@ Dispatched automatically by Musicae Curo.
         all_playlists_summary: Optional[List[Dict[str, Any]]] = None,
         new_alerts: Optional[List[Dict[str, Any]]] = None,
         provider_name: str = "Music Provider",
+        follower_stats: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Dispatch change digest email if notifications are configured."""
         if not self.email_config.is_configured:
             return {"sent": False, "reason": "Email not configured"}
 
         mod_count = len(modified_playlists)
-        subject = f"[Musicae Curo] Playlist Updates: {mod_count} playlist(s) modified"
+        if mod_count == 0 and follower_stats and follower_stats.get("has_changes"):
+            subject = "[Musicae Curo] Social Reach: New Follower Updates"
+        elif mod_count > 0:
+            subject = f"[Musicae Curo] Playlist Updates: {mod_count} playlist(s) modified"
+        else:
+            subject = "[Musicae Curo] Daily Library & Social Digest"
 
         html_body, text_body = self.render_changes_digest(
             modified_playlists=modified_playlists,
             all_playlists_summary=all_playlists_summary,
             new_alerts=new_alerts,
             provider_name=provider_name,
+            follower_stats=follower_stats,
         )
 
         try:
@@ -651,6 +728,9 @@ Dispatched automatically by Musicae Curo.
         batch_results: Dict[str, Any],
         force_all: bool = False,
         provider_name: str = "Music Provider",
+        modified_playlists: Optional[List[Dict[str, Any]]] = None,
+        new_alerts: Optional[List[Dict[str, Any]]] = None,
+        follower_stats: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Dispatch either all-playlists overview (if first run or force_all) or changes digest."""
         if not self.email_config.is_configured:
@@ -665,16 +745,22 @@ Dispatched automatically by Musicae Curo.
             res["is_first_email"] = is_first_time
             return res
 
-        modified = [p for p in all_playlists if p.get("has_changed") or p.get("snapshot_file") or p.get("status") == "created"]
-        new_alerts = [a for p in all_playlists for a in p.get("unavailable_tracks", []) if p.get("new_alerts_count", 0) > 0]
+        modified = modified_playlists if modified_playlists is not None else [
+            p for p in all_playlists if p.get("has_changed") or p.get("snapshot_file") or p.get("status") == "created"
+        ]
+        alerts = new_alerts if new_alerts is not None else [
+            a for p in all_playlists for a in p.get("unavailable_tracks", []) if p.get("new_alerts_count", 0) > 0
+        ]
+        has_follower_changes = bool(follower_stats and follower_stats.get("has_changes"))
 
-        if not modified and not new_alerts and not batch_results.get("total_alerts", 0):
-            logger.info("No playlist modifications or new availability alerts. Skipping notification.")
+        if not modified and not alerts and not batch_results.get("total_alerts", 0) and not has_follower_changes:
+            logger.info("No playlist modifications, availability alerts, or follower changes. Skipping notification.")
             return {"sent": False, "reason": "no_changes_detected"}
 
         return self.send_change_digest(
             modified_playlists=modified,
             all_playlists_summary=all_playlists,
-            new_alerts=new_alerts,
+            new_alerts=alerts,
             provider_name=provider_name,
+            follower_stats=follower_stats,
         )

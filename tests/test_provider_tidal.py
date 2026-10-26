@@ -125,3 +125,80 @@ def test_tidal_get_playlist_track_replacements():
             "26995301": "36142925",
             "26995307": "16573616",
         }
+
+
+def test_tidal_get_user_profile():
+    session = MagicMock()
+    session.access_token = "mock-token-xyz"
+    session.token_type = "Bearer"
+
+    mock_user = MagicMock()
+    mock_user.id = 1234567
+    mock_user.username = "xavier@plantefeve.fr"
+    mock_user.first_name = "Xavier"
+    mock_user.last_name = "P"
+    mock_user.profile_metadata.return_value = {
+        "artistId": 58850564,
+        "profileName": "xave",
+    }
+    session.user = mock_user
+
+    provider = TidalProvider(session=session)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "data": {
+            "id": "58850564",
+            "type": "artists",
+            "attributes": {
+                "name": "xave",
+                "numberOfFollowers": 42,
+            },
+        }
+    }
+
+    with patch("requests.get", return_value=mock_response) as mock_get:
+        profile = provider.get_user_profile()
+        assert profile is not None
+        assert profile.id == "1234567"
+        assert profile.username == "xavier@plantefeve.fr"
+        assert profile.display_name == "xave"
+        assert profile.provider == "tidal"
+        assert profile.followers_count == 42
+
+        mock_get.assert_called_once()
+        args, kwargs = mock_get.call_args
+        assert "https://openapi.tidal.com/v2/artists/58850564" in args[0]
+        assert kwargs["headers"]["Authorization"] == "Bearer mock-token-xyz"
+
+
+def test_tidal_get_playlist_followers():
+    session = MagicMock()
+    session.access_token = "mock-token-xyz"
+    session.token_type = "Bearer"
+    provider = TidalProvider(session=session)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "data": [
+            {
+                "id": "pl-1",
+                "type": "playlists",
+                "attributes": {"numberOfFollowers": 10},
+            },
+            {
+                "id": "pl-2",
+                "type": "playlists",
+                "attributes": {"numberOfFollowers": 3},
+            },
+        ]
+    }
+
+    with patch("requests.get", return_value=mock_response) as mock_get:
+        counts = provider.get_playlist_followers(["pl-1", "pl-2"])
+        assert counts == {"pl-1": 10, "pl-2": 3}
+        mock_get.assert_called_once()
+        args, _ = mock_get.call_args
+        assert "filter[id]=pl-1,pl-2" in args[0]

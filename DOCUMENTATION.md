@@ -270,13 +270,30 @@ Candidates are evaluated and ranked using a 100-point explainable algorithm:
 
 Musicae Curo includes a built-in notification engine (`curo notify`) for headless server alerts:
 
-- **Daily Change Digest**: Dispatched when playlists are modified or delisted tracks are discovered. Includes itemized track additions, removals, and availability warnings.
+- **Daily Change Digest**: Dispatched when playlists are modified or delisted tracks are discovered. Includes itemized track additions, removals, relinked tracks, availability warnings, and social reach tracking.
+- **Followers & Social Reach Tracking**: Monitors follower gains and losses across your public profile and curated playlists (`snapshots/followers.json`), highlighting reach and changes (+N / -N) in the email digest.
 - **Daily Mix & Megamix Summarization**: Ephemeral daily mix and megamix playlists are automatically summarized rather than exhaustively listing hundreds of rotating additions and removals, keeping digests clean and readable.
 - **All Playlists Baseline Overview**: Dispatched on first run or on demand (`curo notify send --all`). Provides an executive summary of all personal playlists, track counts, and availability health.
 - **Supported SMTP Configurations**:
   - Direct TLS / SSL (Port 465).
   - STARTTLS (Port 587 or Port 25 for internal mail relays).
   - Unauthenticated local SMTP relays or authenticated remote servers.
+
+### Decoupled Daily Digest Architecture
+Historically, email notification dispatch was tightly embedded inside the `snapshot_all_playlists` job action. This had several architectural drawbacks:
+1. **Coupling Mutation to Reporting**: If a user ran other jobs (e.g. `daily-discovery-megamix` or `daily-favorites-backup`) but did not run `daily-playlist-backup`, no digest was dispatched.
+2. **Job Ordering Hazards**: To capture track modifications made by mix or backup routines, `snapshot_all_playlists` had to be executed last. Running it earlier resulted in incomplete change summaries.
+
+To solve this, Musicae Curo provides a standalone reporting action:
+- **`send_daily_digest` Action**: Inspects today's snapshot manifests, delisted track alerts, and computes follower reach without mutating playlists.
+- **Independent Scheduling**: In `jobs.yaml` or crontab, you can execute all playlist modification routines throughout the day or night, and schedule a single `daily-digest` job at the very end to summarize all events in a single unified email.
+- **CLI Trigger**: Run `curo notify digest` anytime to aggregate and dispatch the digest on demand.
+
+### Follower Metrics & Social Reach Tracking
+Musicae Curo automatically tracks social reach across your music library:
+- **Public Profile Followers**: For Tidal, queries `/v2/artists/{artistId}` (the underlying artist entity representing public user profiles) to record total profile followers. For Spotify, queries `/v1/me`.
+- **Curated Playlist Followers**: Uses batch queries (e.g., Tidal OpenAPI v2 `filter[id]=...`) to inspect follower counts across all personal playlists efficiently in a single round-trip.
+- **Deltas & Historical State**: State is persisted in `snapshots/followers.json`. Subsequent runs compute exact net differences (`+N new`, `-N`). If any follower count changes, the daily digest highlights these gains/losses prominently even if no playlist tracks were added or removed.
 
 ---
 
@@ -313,6 +330,7 @@ jobs:
 | `snapshot_all_playlists` | Runs SHA-256 versioned snapshots across all personal playlists, updates track history registry, checks track availability, and sends email notifications. | - `alert_on_unavailable` (bool, default: `true`)<br>- `notify` (bool, default: `true`)<br>- `force_all_mail` (bool, default: `false`) |
 | `snapshot_playlist` | Takes a versioned snapshot of a single designated playlist. | - `playlist` (required: playlist title or ID)<br>- `alert_on_unavailable` (bool, default: `true`) |
 | `snapshot_favorite_tracks` | Takes a versioned SHA-256 snapshot of all favorite/liked tracks, updates registry, and logs availability alerts. | - `alert_on_unavailable` (bool, default: `true`) |
+| `send_daily_digest` | Aggregates today's snapshot diffs, delisted alerts, and follower reach, and dispatches the unified daily digest. Decouples notification delivery from playlist mutation jobs. | - `force` (bool, default: `false`)<br>- `include_followers` (bool, default: `true`) |
 | `backup_favorites_to_playlist` | Mirrors all favorite/liked tracks into a designated regular playlist with full pagination. | - `target_playlist` (default: `"Favorites Backup"`)<br>- `mode` (`replace` or `append`, default: `replace`)<br>- `description` (optional description)<br>- `folder` (optional: destination folder name or ID) |
 | `export_playlist` | Exports a designated playlist to disk in the specified format. | - `playlist` (required: playlist title or ID)<br>- `format` (`json`, `m3u8`, or `csv`, default: `json`) |
 | `sync_playlist` | Synchronizes playlist tracks between providers or within the same provider (`mirror` or `append` modes). | - `source_playlist` (required: title or ID)<br>- `target_playlist` (optional: target title)<br>- `source_provider` (optional: provider name)<br>- `target_provider` (optional: target provider name)<br>- `mode` (`mirror` or `append`, default: `mirror`)<br>- `threshold` (percentage float, default: `80`)<br>- `dry_run` (bool, default: `false`)<br>- `create_if_missing` (bool, default: `true`)<br>- `folder` (optional: destination folder name or ID) |
@@ -372,6 +390,14 @@ jobs:
           target_playlist: "Favorites Backup"
           mode: "replace"
           description: "Automated daily backup of favorite/liked tracks"
+
+  daily-digest:
+    description: "Dispatch unified daily email digest with playlist changes, availability alerts, and follower reach"
+    actions:
+      - action: send_daily_digest
+        params:
+          force: false
+          include_followers: true
 ```
 
 ### Scheduling with Linux `cron` or Task Scheduler
@@ -549,4 +575,5 @@ curo job cron-help                              # Generate Linux crontab syntax
 curo notify config --host <smtp> --port <port> [--tls/--ssl] --user <user> --password <pass> --to-addr <email> [--exclude-megamix-diff/--include-megamix-diff]
 curo notify test                # Verify SMTP delivery
 curo notify send [--all]        # Dispatch notification manually
+curo notify digest [--force]    # Aggregate daily diffs, alerts & followers into digest
 ```

@@ -178,3 +178,31 @@ jobs:
         call2 = mix_inst.create_megamix.call_args[1]
         assert call2["folder"] == "Explicit Megamix Folder"
 
+
+
+def test_job_runner_send_daily_digest_action(tmp_path: Path):
+    cfg = ConfigManager(custom_config_dir=tmp_path)
+    custom_yaml = """
+jobs:
+  daily-digest-job:
+    actions:
+      - action: send_daily_digest
+        params:
+          force: true
+          include_followers: true
+"""
+    cfg.jobs_file.write_text(custom_yaml, encoding="utf-8")
+    mock_provider = MagicMock(spec=MusicProvider)
+    runner = JobRunner(provider=mock_provider, cfg=cfg)
+
+    with patch("curo.services.job_runner.SnapshotService") as MockSnapshotService:
+        snap_inst = MockSnapshotService.return_value
+        snap_inst.send_daily_digest.return_value = {"sent": True, "success": True}
+
+        res = runner.run_job("daily-digest-job")
+        assert res["success"] is True
+        assert res["actions_executed"] == 1
+        snap_inst.send_daily_digest.assert_called_once_with(
+            force=True,
+            include_followers=True,
+        )
