@@ -55,7 +55,7 @@ jobs:
       - action: snapshot_all_playlists
         params:
           alert_on_unavailable: true
-          notify: true
+          notify: false
 
   daily-favorites-backup:
     description: "Daily versioned snapshot and playlist mirror of all favorite/liked tracks"

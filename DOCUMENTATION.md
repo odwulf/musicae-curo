@@ -289,6 +289,11 @@ To solve this, Musicae Curo provides a standalone reporting action:
 - **Independent Scheduling**: In `jobs.yaml` or crontab, you can execute all playlist modification routines throughout the day or night, and schedule a single `daily-digest` job at the very end to summarize all events in a single unified email.
 - **CLI Trigger**: Run `curo notify digest` anytime to aggregate and dispatch the digest on demand.
 
+> [!TIP]
+> **Preventing Duplicate Emails**:
+> If you have enabled the standalone `daily-digest` job (or scheduled `curo notify digest`), ensure `notify: false` is set on `daily-playlist-backup` in `jobs.yaml`. Otherwise, both `daily-playlist-backup` and `daily-digest` will send email notifications.
+
+
 ### Follower Metrics & Social Reach Tracking
 Musicae Curo automatically tracks social reach across your music library:
 - **Public Profile Followers**: For Tidal, queries `/v2/artists/{artistId}` (the underlying artist entity representing public user profiles) to record total profile followers. For Spotify, queries `/v1/me`.
@@ -377,7 +382,7 @@ jobs:
       - action: snapshot_all_playlists
         params:
           alert_on_unavailable: true
-          notify: true
+          notify: false
 
   daily-favorites-backup:
     description: "Daily versioned snapshot and playlist mirror of all favorite/liked tracks"
