@@ -525,6 +525,7 @@ class SnapshotService:
             full_data["content_hash"] = current_hash
             full_data["snapshot_created_at"] = now_utc.isoformat()
             full_data["version"] = len(snapshots_list) + 1
+            full_data["track_diff"] = track_diff
 
             with open(snapshot_path, "w", encoding="utf-8") as f:
                 json.dump(full_data, f, indent=2, ensure_ascii=False)
@@ -680,6 +681,7 @@ class SnapshotService:
             full_data["content_hash"] = current_hash
             full_data["snapshot_created_at"] = now_utc.isoformat()
             full_data["version"] = len(snapshots_list) + 1
+            full_data["track_diff"] = track_diff
 
             with open(snapshot_path, "w", encoding="utf-8") as f:
                 json.dump(full_data, f, indent=2, ensure_ascii=False)
@@ -964,13 +966,44 @@ class SnapshotService:
                         with open(snap_file, "r", encoding="utf-8") as sf:
                             snap_data = json.load(sf) or {}
                         snap_created = snap_data.get("snapshot_created_at", "")
-                        if snap_created.startswith(today_date_str) or len(snaps) == 1:
-                            t_diff = snap_data.get("track_diff") or {}
+                        snap_timestamp = last_snap.get("timestamp", "")
+                        is_today = snap_created.startswith(today_date_str) or snap_timestamp.startswith(today_date_str)
+
+                        if is_today:
+                            t_diff = snap_data.get("track_diff")
+                            if not t_diff:
+                                if len(snaps) >= 2:
+                                    prev_file = child / snaps[-2].get("filename", "")
+                                    if prev_file.exists():
+                                        try:
+                                            with open(prev_file, "r", encoding="utf-8") as pf:
+                                                prev_data = json.load(pf) or {}
+                                            t_diff = compute_track_diff(prev_data.get("tracks", []), snap_data.get("tracks", []))
+                                        except Exception as de:
+                                            logger.debug(f"Failed to compute dynamic diff for '{pl_name}': {de}")
+                                elif len(snaps) == 1:
+                                    # Brand new playlist created today: all tracks are added
+                                    tracks = snap_data.get("tracks", [])
+                                    t_diff = {
+                                        "added_tracks": [
+                                            {
+                                                "title": t.get("name") or t.get("title") or "Unknown Title",
+                                                "artist": (t.get("artist", {}).get("name") if isinstance(t.get("artist"), dict) else str(t.get("artist") or ""))
+                                            }
+                                            for t in tracks
+                                        ],
+                                        "removed_tracks": [],
+                                        "relinked_tracks": [],
+                                        "reordered": False,
+                                    }
+
+                            t_diff = t_diff or {}
                             has_diff = bool(
                                 t_diff.get("added_tracks")
                                 or t_diff.get("removed_tracks")
                                 or t_diff.get("relinked_tracks")
                             )
+
                             if has_diff or len(snaps) == 1:
                                 modified_entry = dict(pl_summary)
                                 modified_entry["track_diff"] = t_diff
@@ -997,11 +1030,15 @@ class SnapshotService:
 
         from curo.services.email_service import EmailService
         email_svc = EmailService(cfg=self.config)
-        return email_svc.send_digest_notification(
-            batch_results=batch_result,
+        has_follower_changes = bool(follower_stats and follower_stats.get("has_changes"))
+        if not modified_playlists and not today_alerts and not has_follower_changes and not force:
+            logger.info("No playlist modifications, alerts, or follower changes today. Skipping digest.")
+            return {"sent": False, "reason": "no_changes_detected"}
+
+        return email_svc.send_change_digest(
             modified_playlists=modified_playlists,
+            all_playlists_summary=all_playlists_summary,
             new_alerts=today_alerts,
-            follower_stats=follower_stats,
-            force_all=force,
             provider_name=prov_name,
+            follower_stats=follower_stats,
         )

@@ -477,7 +477,7 @@ def test_send_daily_digest(temp_config: ConfigManager):
     # Mock email service and update_followers_metrics
     with patch("curo.services.email_service.EmailService") as mock_email_cls:
         mock_email_instance = MagicMock()
-        mock_email_instance.send_digest_notification.return_value = {"sent": True, "follower_changes": True}
+        mock_email_instance.send_change_digest.return_value = {"sent": True, "follower_changes": True}
         mock_email_cls.return_value = mock_email_instance
 
         # Fake follower stats
@@ -491,6 +491,104 @@ def test_send_daily_digest(temp_config: ConfigManager):
 
             assert res["sent"] is True
             assert res["follower_changes"] is True
-            mock_email_instance.send_digest_notification.assert_called_once()
-            args, kwargs = mock_email_instance.send_digest_notification.call_args
+            mock_email_instance.send_change_digest.assert_called_once()
+            args, kwargs = mock_email_instance.send_change_digest.call_args
             assert kwargs["follower_stats"]["profile"]["current_followers"] == 5
+
+
+def test_send_daily_digest_filters_old_snapshots_and_recovers_diff(temp_config: ConfigManager):
+    import datetime
+    mock_provider = MagicMock()
+    mock_provider.name = "tidal"
+    mock_provider.display_name = "Tidal"
+
+    service = SnapshotService(provider=mock_provider, cfg=temp_config)
+    snaps_dir = service.snapshots_dir
+
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    today_iso = now_utc.strftime("%Y-%m-%dT%H%M%SZ")
+    today_date = now_utc.strftime("%Y-%m-%d")
+    yesterday_date = (now_utc - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+
+    # 1. Old playlist with 1 snapshot from yesterday (should NOT be marked modified)
+    p1_dir = snaps_dir / "old_static_playlist"
+    p1_dir.mkdir(parents=True)
+    (p1_dir / "manifest.json").write_text(json.dumps({
+        "playlist_id": "p1",
+        "playlist_name": "Old Static Playlist",
+        "playlist_slug": "old_static_playlist",
+        "snapshots": [
+            {"version": 1, "timestamp": f"{yesterday_date}T10:00:00Z", "filename": "v1.json", "track_count": 10, "unavailable_count": 0}
+        ]
+    }), encoding="utf-8")
+    (p1_dir / "v1.json").write_text(json.dumps({
+        "snapshot_created_at": f"{yesterday_date}T10:00:00Z",
+        "tracks": [{"id": "1", "name": "Song 1", "available": True}],
+    }), encoding="utf-8")
+
+    # 2. Brand new playlist created today with 1 snapshot (should be marked modified with track 2 added)
+    p2_dir = snaps_dir / "new_today_playlist"
+    p2_dir.mkdir(parents=True)
+    (p2_dir / "manifest.json").write_text(json.dumps({
+        "playlist_id": "p2",
+        "playlist_name": "New Today Playlist",
+        "playlist_slug": "new_today_playlist",
+        "snapshots": [
+            {"version": 1, "timestamp": f"{today_date}T08:00:00Z", "filename": "v1.json", "track_count": 1, "unavailable_count": 0}
+        ]
+    }), encoding="utf-8")
+    (p2_dir / "v1.json").write_text(json.dumps({
+        "snapshot_created_at": f"{today_date}T08:00:00Z",
+        "tracks": [{"id": "2", "name": "Song 2", "artist": {"name": "Artist 2"}, "available": True}],
+    }), encoding="utf-8")
+
+    # 3. Existing playlist modified today (v1 from yesterday, v2 from today without saved track_diff)
+    p3_dir = snaps_dir / "modified_today_playlist"
+    p3_dir.mkdir(parents=True)
+    (p3_dir / "manifest.json").write_text(json.dumps({
+        "playlist_id": "p3",
+        "playlist_name": "Modified Today Playlist",
+        "playlist_slug": "modified_today_playlist",
+        "snapshots": [
+            {"version": 1, "timestamp": f"{yesterday_date}T10:00:00Z", "filename": "v1.json", "track_count": 1, "unavailable_count": 0},
+            {"version": 2, "timestamp": f"{today_date}T09:00:00Z", "filename": "v2.json", "track_count": 2, "unavailable_count": 0},
+        ]
+    }), encoding="utf-8")
+    (p3_dir / "v1.json").write_text(json.dumps({
+        "snapshot_created_at": f"{yesterday_date}T10:00:00Z",
+        "tracks": [{"id": "10", "name": "Original Song", "available": True}],
+    }), encoding="utf-8")
+    (p3_dir / "v2.json").write_text(json.dumps({
+        "snapshot_created_at": f"{today_date}T09:00:00Z",
+        "tracks": [
+            {"id": "10", "name": "Original Song", "available": True},
+            {"id": "20", "name": "Added Song", "available": True},
+        ],
+    }), encoding="utf-8")
+
+    with patch("curo.services.email_service.EmailService") as mock_email_cls:
+        mock_email_instance = MagicMock()
+        mock_email_instance.send_change_digest.return_value = {"sent": True}
+        mock_email_cls.return_value = mock_email_instance
+
+        with patch.object(service, "update_followers_metrics", return_value={"has_changes": False}):
+            res = service.send_daily_digest(force=True)
+
+            mock_email_instance.send_change_digest.assert_called_once()
+            _, kwargs = mock_email_instance.send_change_digest.call_args
+            modified = kwargs["modified_playlists"]
+
+            # Only p2 and p3 should be modified!
+            modified_names = [p["playlist_name"] for p in modified]
+            assert "Old Static Playlist" not in modified_names
+            assert "New Today Playlist" in modified_names
+            assert "Modified Today Playlist" in modified_names
+
+            # Verify track diffs were recovered
+            p2_entry = next(p for p in modified if p["playlist_name"] == "New Today Playlist")
+            assert len(p2_entry["track_diff"]["added_tracks"]) == 1
+            assert p2_entry["track_diff"]["added_tracks"][0]["title"] == "Song 2"
+
+            p3_entry = next(p for p in modified if p["playlist_name"] == "Modified Today Playlist")
+            assert len(p3_entry["track_diff"]["added_tracks"]) == 1
+            assert p3_entry["track_diff"]["added_tracks"][0]["title"] == "Added Song"
