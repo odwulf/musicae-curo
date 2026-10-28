@@ -4,7 +4,7 @@
 
 Musicae Curo (*Latin: "I care for music"*) is a modular, provider-agnostic music curation and playlist preservation CLI. Tailored for automated Linux `cron` background jobs and interactive terminal administration, it keeps your playlists healthy, archives ephemeral daily discovery mixes, versions personal playlists with SHA-256 change detection, repairs retired/delisted tracks, and dispatches change digests via email.
 
-📖 **[Full Documentation & Architecture Guide](DOCUMENTATION.md)** | 🤖 **[AI Agent Guide](AGENTS.md)**
+📖 **[Full Documentation](DOCUMENTATION.md)** | 📐 **[Architecture Plans](docs/plans/README.md)** | 🤖 **[AI Agent Guide](AGENTS.md)**
 
 > [!NOTE]
 > ### Disclaimer & Project Origins

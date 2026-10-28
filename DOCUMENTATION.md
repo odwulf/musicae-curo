@@ -4,6 +4,8 @@
 
 Musicae Curo is a modular, provider-agnostic music library custodian CLI application designed for headless automation, playlist preservation, and algorithmic mix archival across music streaming platforms.
 
+📖 **[Full Documentation](DOCUMENTATION.md)** | 📐 **[Architecture Plans](docs/plans/README.md)** | 🤖 **[AI Agent Guide](AGENTS.md)**
+
 > [!NOTE]
 > **Disclaimer & Project Origins**: This project was conceived to address personal music curation and playlist preservation workflows. All Python code and architectural designs were implemented with the aid of an AI coding agent. The author is not a software engineer and provides this repository openly as-is for the benefit of the community.
 

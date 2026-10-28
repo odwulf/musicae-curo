@@ -103,6 +103,8 @@ src/curo/
 4. **Mock Handling in Unit Tests**:
    - In unit tests with `MagicMock`, unconfigured attributes create dynamic mock objects that are truthy in Python.
    - Helper functions `_is_mock(val)` and `_clean_str(val)` protect serialization and scoring logic from treating mock children as real data.
+5. **Architectural Specifications & ADRs**:
+   - For mathematical design specifications (100-point scoring algorithm, acoustic/live penalties), versioning blueprints, and cross-provider sync plans, refer to [docs/plans/](docs/plans/README.md).
 
 ---
 
