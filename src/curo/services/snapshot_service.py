@@ -375,6 +375,60 @@ class SnapshotService:
             logger.error(f"Failed to read alerts log at {self.alerts_log_file}: {e}")
         return alerts
 
+    def _get_alerted_track_keys(self) -> Set[tuple[str, str]]:
+        """Return the set of (playlist_id, track_id) pairs already recorded in availability_alerts.log."""
+        keys: Set[tuple[str, str]] = set()
+        if not self.alerts_log_file.exists():
+            return keys
+        try:
+            with open(self.alerts_log_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        pid = str(data.get("playlist_id", ""))
+                        tid = str(data.get("track_id", ""))
+                        if pid and tid:
+                            keys.add((pid, tid))
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            logger.debug(f"Failed to read alerted track keys from {self.alerts_log_file}: {e}")
+        return keys
+
+    def _get_new_alerts_for_date(self, date_str: str) -> List[Dict[str, Any]]:
+        """Return availability alerts logged on date_str that were not already logged on an earlier date."""
+        if not self.alerts_log_file.exists():
+            return []
+        seen_keys: Set[tuple[str, str]] = set()
+        new_today: List[Dict[str, Any]] = []
+        try:
+            with open(self.alerts_log_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    ts = str(data.get("timestamp", ""))
+                    pid = str(data.get("playlist_id", ""))
+                    tid = str(data.get("track_id", ""))
+                    key = (pid, tid)
+                    if ts.startswith(date_str):
+                        if key not in seen_keys:
+                            new_today.append(data)
+                            if pid and tid:
+                                seen_keys.add(key)
+                    elif ts < date_str and pid and tid:
+                        seen_keys.add(key)
+        except Exception as e:
+            logger.error(f"Failed to filter today's alerts from {self.alerts_log_file}: {e}")
+        return new_today
+
     def snapshot_playlist(
         self,
         identifier: str,
@@ -435,6 +489,7 @@ class SnapshotService:
 
         unavailable_tracks = []
         newly_unavailable_alerts = []
+        alerted_keys = self._get_alerted_track_keys() if alert_on_unavailable else set()
         for idx, t in enumerate(tracks):
             if not is_track_available(t):
                 hist = self.get_historical_track(t.id) or {}
@@ -474,35 +529,38 @@ class SnapshotService:
                 unavailable_tracks.append(unavail_info)
 
                 if alert_on_unavailable:
-                    alert_msg = (
-                        f"Track '{unavail_info['title']}' by '{unavail_info['artist']}' "
-                        f"is UNAVAILABLE in playlist '{playlist.name}'"
-                    )
-                    if rep_id:
-                        alert_msg += f" (Official replacement available: '{rep_title or rep_id}' [ID: {rep_id}])"
+                    alert_key = (str(playlist.id), str(t.id))
+                    if alert_key not in alerted_keys:
+                        alert_msg = (
+                            f"Track '{unavail_info['title']}' by '{unavail_info['artist']}' "
+                            f"is UNAVAILABLE in playlist '{playlist.name}'"
+                        )
+                        if rep_id:
+                            alert_msg += f" (Official replacement available: '{rep_title or rep_id}' [ID: {rep_id}])"
 
-                    alert = {
-                        "timestamp": now_utc.isoformat(),
-                        "provider": self.provider.name,
-                        "playlist_id": str(playlist.id),
-                        "playlist_name": playlist.name,
-                        "playlist_slug": slug,
-                        "track_id": t.id,
-                        "title": unavail_info["title"],
-                        "track_title": unavail_info["title"],
-                        "artist": unavail_info["artist"],
-                        "artist_name": unavail_info["artist"],
-                        "album": unavail_info["album"],
-                        "reason": "unavailable",
-                        "historical_isrc": unavail_info["historical_isrc"],
-                        "historical_upc": unavail_info["historical_upc"],
-                        "has_provider_replacement": bool(rep_id),
-                        "provider_replacement_id": rep_id,
-                        "provider_replacement_title": rep_title,
-                        "message": alert_msg,
-                    }
-                    self._append_alert(alert)
-                    newly_unavailable_alerts.append(alert)
+                        alert = {
+                            "timestamp": now_utc.isoformat(),
+                            "provider": self.provider.name,
+                            "playlist_id": str(playlist.id),
+                            "playlist_name": playlist.name,
+                            "playlist_slug": slug,
+                            "track_id": t.id,
+                            "title": unavail_info["title"],
+                            "track_title": unavail_info["title"],
+                            "artist": unavail_info["artist"],
+                            "artist_name": unavail_info["artist"],
+                            "album": unavail_info["album"],
+                            "reason": "unavailable",
+                            "historical_isrc": unavail_info["historical_isrc"],
+                            "historical_upc": unavail_info["historical_upc"],
+                            "has_provider_replacement": bool(rep_id),
+                            "provider_replacement_id": rep_id,
+                            "provider_replacement_title": rep_title,
+                            "message": alert_msg,
+                        }
+                        self._append_alert(alert)
+                        newly_unavailable_alerts.append(alert)
+                        alerted_keys.add(alert_key)
 
         saved_path: Optional[str] = None
         snapshots_list = manifest.get("snapshots", [])
@@ -616,6 +674,7 @@ class SnapshotService:
 
         unavailable_tracks = []
         newly_unavailable_alerts = []
+        alerted_keys = self._get_alerted_track_keys() if alert_on_unavailable else set()
         for idx, t in enumerate(tracks):
             if not is_track_available(t):
                 hist = self.get_historical_track(t.id) or {}
@@ -633,28 +692,31 @@ class SnapshotService:
                 unavailable_tracks.append(unavail_info)
 
                 if alert_on_unavailable:
-                    alert = {
-                        "timestamp": now_utc.isoformat(),
-                        "provider": self.provider.name,
-                        "playlist_id": slug,
-                        "playlist_name": f"Favorite Tracks ({self.provider.display_name})",
-                        "playlist_slug": slug,
-                        "track_id": getattr(t, "id", None),
-                        "title": unavail_info["title"],
-                        "track_title": unavail_info["title"],
-                        "artist": unavail_info["artist"],
-                        "artist_name": unavail_info["artist"],
-                        "album": getattr(getattr(t, "album", None), "name", None) or getattr(getattr(t, "album", None), "title", "Unknown Album"),
-                        "reason": "unavailable",
-                        "historical_isrc": unavail_info["isrc"],
-                        "historical_upc": unavail_info["album_upc"],
-                        "message": (
-                            f"Favorite track '{unavail_info['title']}' by '{unavail_info['artist']}' "
-                            f"is UNAVAILABLE on {self.provider.display_name}"
-                        ),
-                    }
-                    self._append_alert(alert)
-                    newly_unavailable_alerts.append(alert)
+                    alert_key = (str(slug), str(getattr(t, "id", None)))
+                    if alert_key not in alerted_keys:
+                        alert = {
+                            "timestamp": now_utc.isoformat(),
+                            "provider": self.provider.name,
+                            "playlist_id": slug,
+                            "playlist_name": f"Favorite Tracks ({self.provider.display_name})",
+                            "playlist_slug": slug,
+                            "track_id": getattr(t, "id", None),
+                            "title": unavail_info["title"],
+                            "track_title": unavail_info["title"],
+                            "artist": unavail_info["artist"],
+                            "artist_name": unavail_info["artist"],
+                            "album": getattr(getattr(t, "album", None), "name", None) or getattr(getattr(t, "album", None), "title", "Unknown Album"),
+                            "reason": "unavailable",
+                            "historical_isrc": unavail_info["isrc"],
+                            "historical_upc": unavail_info["album_upc"],
+                            "message": (
+                                f"Favorite track '{unavail_info['title']}' by '{unavail_info['artist']}' "
+                                f"is UNAVAILABLE on {self.provider.display_name}"
+                            ),
+                        }
+                        self._append_alert(alert)
+                        newly_unavailable_alerts.append(alert)
+                        alerted_keys.add(alert_key)
 
         track_diff = {"added_tracks": [], "removed_tracks": [], "relinked_tracks": [], "reordered": False}
         if snapshots_list and (fav_dir / snapshots_list[-1]["filename"]).exists():
@@ -919,6 +981,7 @@ class SnapshotService:
 
     def send_daily_digest(
         self,
+        send_when_no_changes: bool = False,
         force: bool = False,
         provider_name: Optional[str] = None,
         include_followers: bool = True,
@@ -1015,23 +1078,14 @@ class SnapshotService:
                 except Exception as e:
                     logger.debug(f"Failed to read snapshot manifest in {child}: {e}")
 
-        # 3. Recent alerts from today
-        recent_alerts = self.get_recent_alerts(limit=50)
-        today_alerts = [
-            a for a in recent_alerts
-            if str(a.get("timestamp", "")).startswith(today_date_str)
-        ]
-
-        batch_result = {
-            "playlists_scanned": len(all_playlists_summary),
-            "total_alerts": len(today_alerts),
-            "playlists": all_playlists_summary,
-        }
+        # 3. Recent alerts from today (excluding tracks already alerted on previous days)
+        today_alerts = self._get_new_alerts_for_date(today_date_str)
 
         from curo.services.email_service import EmailService
         email_svc = EmailService(cfg=self.config)
         has_follower_changes = bool(follower_stats and follower_stats.get("has_changes"))
-        if not modified_playlists and not today_alerts and not has_follower_changes and not force:
+        should_send_empty = bool(send_when_no_changes or force)
+        if not modified_playlists and not today_alerts and not has_follower_changes and not should_send_empty:
             logger.info("No playlist modifications, alerts, or follower changes today. Skipping digest.")
             return {"sent": False, "reason": "no_changes_detected"}
 

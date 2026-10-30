@@ -203,6 +203,36 @@ jobs:
         assert res["success"] is True
         assert res["actions_executed"] == 1
         snap_inst.send_daily_digest.assert_called_once_with(
+            send_when_no_changes=True,
             force=True,
+            include_followers=True,
+        )
+
+
+def test_job_runner_send_daily_digest_send_when_no_changes_default_false(tmp_path: Path):
+    cfg = ConfigManager(custom_config_dir=tmp_path)
+    custom_yaml = """
+jobs:
+  daily-digest-job:
+    actions:
+      - action: send_daily_digest
+        params:
+          send_when_no_changes: false
+          include_followers: true
+"""
+    cfg.jobs_file.write_text(custom_yaml, encoding="utf-8")
+    mock_provider = MagicMock(spec=MusicProvider)
+    runner = JobRunner(provider=mock_provider, cfg=cfg)
+
+    with patch("curo.services.job_runner.SnapshotService") as MockSnapshotService:
+        snap_inst = MockSnapshotService.return_value
+        snap_inst.send_daily_digest.return_value = {"sent": False, "reason": "no_changes_detected"}
+
+        res = runner.run_job("daily-digest-job")
+        assert res["success"] is True
+        assert res["actions_executed"] == 1
+        snap_inst.send_daily_digest.assert_called_once_with(
+            send_when_no_changes=False,
+            force=False,
             include_followers=True,
         )

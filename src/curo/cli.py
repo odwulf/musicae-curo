@@ -1110,7 +1110,12 @@ def notify_send(
 
 @notify_app.command("digest")
 def notify_digest(
-    force: bool = typer.Option(False, "--force", "-f", help="Force sending digest even if no changes detected"),
+    send_when_no_changes: bool = typer.Option(
+        False,
+        "--send-when-no-changes/--no-send-when-no-changes",
+        help="Send digest email even when no playlist, alert, or follower changes occurred",
+    ),
+    force: bool = typer.Option(False, "--force", "-f", help="Alias for --send-when-no-changes"),
     include_followers: bool = typer.Option(True, "--followers/--no-followers", help="Include profile and playlist follower reach"),
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
 ) -> None:
@@ -1119,7 +1124,8 @@ def notify_digest(
     snap_svc = SnapshotService(p, cfg=state["config"])
 
     res = snap_svc.send_daily_digest(
-        force=force,
+        send_when_no_changes=bool(send_when_no_changes or force),
+        force=bool(send_when_no_changes or force),
         provider_name=p.display_name,
         include_followers=include_followers,
     )

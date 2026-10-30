@@ -337,7 +337,7 @@ jobs:
 | `snapshot_all_playlists` | Runs SHA-256 versioned snapshots across all personal playlists, updates track history registry, checks track availability, and sends email notifications. | - `alert_on_unavailable` (bool, default: `true`)<br>- `notify` (bool, default: `true`)<br>- `force_all_mail` (bool, default: `false`) |
 | `snapshot_playlist` | Takes a versioned snapshot of a single designated playlist. | - `playlist` (required: playlist title or ID)<br>- `alert_on_unavailable` (bool, default: `true`) |
 | `snapshot_favorite_tracks` | Takes a versioned SHA-256 snapshot of all favorite/liked tracks, updates registry, and logs availability alerts. | - `alert_on_unavailable` (bool, default: `true`) |
-| `send_daily_digest` | Aggregates today's snapshot diffs, delisted alerts, and follower reach, and dispatches the unified daily digest. Decouples notification delivery from playlist mutation jobs. | - `force` (bool, default: `false`)<br>- `include_followers` (bool, default: `true`) |
+| `send_daily_digest` | Aggregates today's snapshot diffs, delisted alerts, and follower reach, and dispatches the unified daily digest. Decouples notification delivery from playlist mutation jobs. | - `send_when_no_changes` (bool, default: `false`; alias: `force`)<br>- `include_followers` (bool, default: `true`) |
 | `backup_favorites_to_playlist` | Mirrors all favorite/liked tracks into a designated regular playlist with full pagination. | - `target_playlist` (default: `"Favorites Backup"`)<br>- `mode` (`replace` or `append`, default: `replace`)<br>- `description` (optional description)<br>- `folder` (optional: destination folder name or ID) |
 | `export_playlist` | Exports a designated playlist to disk in the specified format. | - `playlist` (required: playlist title or ID)<br>- `format` (`json`, `m3u8`, or `csv`, default: `json`) |
 | `sync_playlist` | Synchronizes playlist tracks between providers or within the same provider (`mirror` or `append` modes). | - `source_playlist` (required: title or ID)<br>- `target_playlist` (optional: target title)<br>- `source_provider` (optional: provider name)<br>- `target_provider` (optional: target provider name)<br>- `mode` (`mirror` or `append`, default: `mirror`)<br>- `threshold` (percentage float, default: `80`)<br>- `dry_run` (bool, default: `false`)<br>- `create_if_missing` (bool, default: `true`)<br>- `folder` (optional: destination folder name or ID) |
@@ -403,7 +403,7 @@ jobs:
     actions:
       - action: send_daily_digest
         params:
-          force: false
+          send_when_no_changes: false
           include_followers: true
 ```
 
@@ -582,5 +582,5 @@ curo job cron-help                              # Generate Linux crontab syntax
 curo notify config --host <smtp> --port <port> [--tls/--ssl] --user <user> --password <pass> --to-addr <email> [--exclude-megamix-diff/--include-megamix-diff]
 curo notify test                # Verify SMTP delivery
 curo notify send [--all]        # Dispatch notification manually
-curo notify digest [--force]    # Aggregate daily diffs, alerts & followers into digest
+curo notify digest [--send-when-no-changes] # Aggregate daily diffs, alerts & followers into digest
 ```

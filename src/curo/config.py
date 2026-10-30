@@ -74,7 +74,7 @@ jobs:
     actions:
       - action: send_daily_digest
         params:
-          force: false
+          send_when_no_changes: false
           include_followers: true
 """
 

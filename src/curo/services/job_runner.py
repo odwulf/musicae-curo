@@ -120,8 +120,12 @@ class JobRunner:
                         force_all_mail=params.get("force_all_mail", False),
                     )
                 elif action_type in ("send_daily_digest", "send_digest", "notify_digest"):
+                    send_when_no_changes = bool(
+                        params.get("send_when_no_changes", params.get("force", params.get("force_all", False)))
+                    )
                     res = snapshot_service.send_daily_digest(
-                        force=params.get("force", params.get("force_all", False)),
+                        send_when_no_changes=send_when_no_changes,
+                        force=send_when_no_changes,
                         include_followers=params.get("include_followers", True),
                     )
                 elif action_type == "snapshot_playlist":

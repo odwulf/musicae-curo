@@ -559,6 +559,41 @@ Dispatched automatically by Musicae Curo.
 
         change_details_content = ''.join(modified_blocks_html) if modified_blocks_html else '<p style="color: #64748b; font-style: italic; margin: 0;">No playlist track modifications detected in this run.</p>'
 
+        # Render standalone new availability alerts for playlists not already in modified_playlists
+        modified_ids = {str(p.get("playlist_id") or p.get("id") or "") for p in modified_playlists}
+        modified_names = {str(p.get("playlist_name") or p.get("name") or "") for p in modified_playlists}
+        standalone_alerts = [
+            a for a in (new_alerts or [])
+            if str(a.get("playlist_id") or "") not in modified_ids
+            and str(a.get("playlist_name") or "") not in modified_names
+        ]
+        alerts_html = ""
+        alerts_text_lines: List[str] = []
+        if standalone_alerts:
+            alert_items_html = []
+            for a in standalone_alerts:
+                a_title = html.escape(str(a.get("title") or a.get("track_title") or "Unknown Title"))
+                a_art = html.escape(str(a.get("artist") or a.get("artist_name") or "Unknown Artist"))
+                a_pl = html.escape(str(a.get("playlist_name") or "Playlist"))
+                rep_id = a.get("provider_replacement_id")
+                rep_badge = f' <span style="font-size: 11px; background-color: #d1fae5; color: #065f46; padding: 2px 6px; border-radius: 4px; margin-left: 6px;">Replacement Ready (ID: {html.escape(str(rep_id))})</span>' if rep_id else ""
+                alert_items_html.append(
+                    f'<li style="margin-bottom: 6px; font-size: 13px; color: #b91c1c;">'
+                    f'<strong>! {a_title}</strong> by {a_art} <span style="color: #64748b;">(in <em>{a_pl}</em>)</span>{rep_badge}'
+                    f'</li>'
+                )
+                rep_txt = f" [Official Replacement ID: {rep_id}]" if rep_id else ""
+                alerts_text_lines.append(
+                    f"  ! {a.get('title') or a.get('track_title') or 'Unknown Title'} by {a.get('artist') or a.get('artist_name') or 'Unknown Artist'} (in '{a.get('playlist_name') or 'Playlist'}'){rep_txt}"
+                )
+            alerts_html = f"""
+      <div style="margin-top: 20px; padding: 16px 20px; background-color: #fff1f2; border: 1px solid #fecdd3; border-radius: 8px;">
+        <h3 style="margin: 0 0 10px 0; font-size: 14px; font-weight: 600; color: #9f1239;">Newly Unavailable Tracks ({len(standalone_alerts)})</h3>
+        <ul style="margin: 0; padding-left: 18px;">
+          {''.join(alert_items_html)}
+        </ul>
+      </div>"""
+
         html_body = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -578,6 +613,7 @@ Dispatched automatically by Musicae Curo.
       {follower_html}
       <h2 style="margin: 0 0 14px 0; font-size: 16px; font-weight: 600; color: #0f172a;">Playlist Change Details</h2>
       {change_details_content}
+      {alerts_html}
     </div>
     <div style="background-color: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 28px; font-size: 12px; color: #64748b; text-align: center;">
       Automated daily notification by <strong>Musicae Curo</strong>.
@@ -657,6 +693,14 @@ Dispatched automatically by Musicae Curo.
                     lines.append(f"  ! Unavailable: {u_title} {f'by {u_art}' if u_art else ''}{rep_suffix}")
             lines.append("")
 
+        if alerts_text_lines:
+            lines.extend([
+                f"Newly Unavailable Tracks ({len(alerts_text_lines)}):",
+                "-" * 40,
+                *alerts_text_lines,
+                "",
+            ])
+
         lines.extend([
             "--",
             "Automated daily notification by Musicae Curo",
@@ -677,8 +721,11 @@ Dispatched automatically by Musicae Curo.
             return {"sent": False, "reason": "Email not configured"}
 
         mod_count = len(modified_playlists)
+        alert_count = len(new_alerts or [])
         if mod_count == 0 and follower_stats and follower_stats.get("has_changes"):
             subject = "[Musicae Curo] Social Reach: New Follower Updates"
+        elif mod_count == 0 and alert_count > 0:
+            subject = f"[Musicae Curo] Availability Alert: {alert_count} track(s) unavailable"
         elif mod_count > 0:
             subject = f"[Musicae Curo] Playlist Updates: {mod_count} playlist(s) modified"
         else:

@@ -592,3 +592,83 @@ def test_send_daily_digest_filters_old_snapshots_and_recovers_diff(temp_config: 
             p3_entry = next(p for p in modified if p["playlist_name"] == "Modified Today Playlist")
             assert len(p3_entry["track_diff"]["added_tracks"]) == 1
             assert p3_entry["track_diff"]["added_tracks"][0]["title"] == "Added Song"
+
+
+def test_snapshot_deduplicates_unavailable_alerts_and_respects_send_when_no_changes(temp_config: ConfigManager):
+    import datetime
+    session = MagicMock()
+    mock_pl = MagicMock(id="pl-unavail")
+    mock_pl.name = "Unavailable Test"
+    mock_pl.description = ""
+    mock_pl.public = False
+
+    t_unavail = MagicMock(id=999, isrc="US9999999999", duration=180, available=False, allow_streaming=False, stream_ready=False)
+    t_unavail.name = "Missing Song"
+    t_unavail.artist.name = "Ghost Artist"
+    t_unavail.album.name = "Ghost Album"
+    t_unavail.album.upc = "UPC999"
+    t_unavail.album.release_date = "2020-01-01"
+
+    mock_pl.tracks.return_value = [t_unavail]
+    session.user.playlists.return_value = [mock_pl]
+    session.playlist.return_value = mock_pl
+
+    provider = TidalProvider(session=session, cfg=temp_config)
+    service = SnapshotService(provider=provider, cfg=temp_config)
+
+    # First snapshot: logs 1 new unavailable alert
+    res1 = service.snapshot_playlist("pl-unavail", alert_on_unavailable=True)
+    assert res1["unavailable_count"] == 1
+    assert res1["new_alerts_count"] == 1
+
+    # Second snapshot of the same playlist: should NOT log duplicate alert for same track
+    res2 = service.snapshot_playlist("pl-unavail", alert_on_unavailable=True)
+    assert res2["unavailable_count"] == 1
+    assert res2["new_alerts_count"] == 0
+    assert len(service.get_recent_alerts(limit=50)) == 1
+
+    # Simulate alert having been logged yesterday and a duplicate logged today
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    yesterday_iso = (now_utc - datetime.timedelta(days=1)).isoformat()
+    today_iso = now_utc.isoformat()
+    alert_yesterday = {
+        "timestamp": yesterday_iso,
+        "playlist_id": "pl-unavail",
+        "playlist_name": "Unavailable Test",
+        "track_id": 999,
+        "title": "Missing Song",
+        "artist": "Ghost Artist",
+    }
+    alert_today_dup = dict(alert_yesterday, timestamp=today_iso)
+    service.alerts_log_file.write_text(
+        json.dumps(alert_yesterday) + "\n" + json.dumps(alert_today_dup) + "\n",
+        encoding="utf-8",
+    )
+
+    # Backdate manifest so no playlist is considered modified today
+    slug_dir = service.snapshots_dir / "unavailable_test"
+    manifest = json.loads((slug_dir / "manifest.json").read_text(encoding="utf-8"))
+    for s in manifest["snapshots"]:
+        s["timestamp"] = yesterday_iso
+        sf = slug_dir / s["filename"]
+        sd = json.loads(sf.read_text(encoding="utf-8"))
+        sd["snapshot_created_at"] = yesterday_iso
+        sf.write_text(json.dumps(sd), encoding="utf-8")
+    (slug_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    with patch("curo.services.email_service.EmailService") as mock_email_cls:
+        mock_email_instance = MagicMock()
+        mock_email_instance.send_change_digest.return_value = {"sent": True}
+        mock_email_cls.return_value = mock_email_instance
+
+        with patch.object(service, "update_followers_metrics", return_value={"has_changes": False}):
+            # Default (send_when_no_changes=False): should NOT send email
+            digest_res = service.send_daily_digest()
+            assert digest_res["sent"] is False
+            assert digest_res["reason"] == "no_changes_detected"
+            mock_email_instance.send_change_digest.assert_not_called()
+
+            # Explicit send_when_no_changes=True: should send email
+            digest_forced = service.send_daily_digest(send_when_no_changes=True)
+            assert digest_forced["sent"] is True
+            mock_email_instance.send_change_digest.assert_called_once()
