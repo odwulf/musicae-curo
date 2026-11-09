@@ -183,6 +183,14 @@ class PlaylistService:
 
         added = self.add_tracks(playlist=playlist, track_ids=tracks_to_add)
 
+        # Immediate snapshot of the backup playlist to keep it in sync on the same day without 24h lag
+        try:
+            from curo.services.snapshot_service import SnapshotService
+            snap_svc = SnapshotService(self.provider)
+            snap_svc.snapshot_playlist(identifier=target_playlist, alert_on_unavailable=False)
+        except Exception as e:
+            logger.debug(f"Could not take immediate snapshot for '{target_playlist}': {e}")
+
         res: Dict[str, Any] = {
             "success": True,
             "provider": self.provider.name,

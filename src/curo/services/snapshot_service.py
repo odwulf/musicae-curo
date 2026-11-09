@@ -728,6 +728,50 @@ class SnapshotService:
             except Exception as e:
                 logger.debug(f"Failed to compute track diff for '{slug}': {e}")
 
+        # Automatic favorites relinking: check removed tracks for official replacement or catalog replacement
+        auto_relinked_count = 0
+        if track_diff.get("removed_tracks") and self.provider and hasattr(self.provider, "add_favorite_track"):
+            current_fav_ids = {str(getattr(t, "id", None) or "") for t in tracks if getattr(t, "id", None)}
+            for rem in list(track_diff["removed_tracks"]):
+                rem_id = str(rem.get("id") or "")
+                if not rem_id:
+                    continue
+                # 1. Check official provider replacement or historical registry
+                hist = self.get_historical_track(rem_id) or {}
+                rep_id = hist.get("provider_replacement_id")
+                rep_title = hist.get("provider_replacement_title")
+
+                if not rep_id and hasattr(self.provider, "get_track_replacement"):
+                    try:
+                        rep_t = self.provider.get_track_replacement(rem_id)
+                        if rep_t and _safe_str(getattr(rep_t, "id", None)):
+                            rep_id = _safe_str(getattr(rep_t, "id", None))
+                            rep_title = getattr(rep_t, "name", None) or getattr(rep_t, "title", "Unknown Title")
+                    except Exception as e:
+                        logger.debug(f"Failed checking replacement for removed favorite #{rem_id}: {e}")
+
+                if rep_id and rep_id not in current_fav_ids:
+                    logger.info(f"Auto-relinking removed favorite track #{rem_id} -> #{rep_id} ('{rep_title or rem.get('title')}') on {self.provider.display_name}")
+                    if self.provider.add_favorite_track(rep_id):
+                        auto_relinked_count += 1
+                        # Track the relinking in diff
+                        track_diff.setdefault("relinked_tracks", []).append({
+                            "original_id": rem_id,
+                            "replacement_id": rep_id,
+                            "title": rep_title or rem.get("title"),
+                            "artist": rem.get("artist"),
+                            "reason": "auto_relinked_favorite",
+                        })
+                        # Remove from removed_tracks since it is being relinked
+                        track_diff["removed_tracks"] = [r for r in track_diff["removed_tracks"] if str(r.get("id")) != rem_id]
+
+            if auto_relinked_count > 0:
+                # Refresh favorite tracks from provider to reflect the newly auto-relinked tracks
+                tracks = self.provider.get_favorite_tracks()
+                current_hash = self._compute_content_hash(tracks)
+                has_changed = True
+                self.update_track_registry(tracks, slug)
+
         saved_path = None
         if has_changed or not last_snapshot_exists:
             from curo.core.models import Playlist as DomainPlaylist

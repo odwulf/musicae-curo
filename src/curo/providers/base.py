@@ -48,6 +48,14 @@ class ProviderStub(MusicProvider):
         self._not_implemented("get_favorite_tracks")
         return []
 
+    def add_favorite_track(self, track_id: str) -> bool:
+        self._not_implemented("add_favorite_track")
+        return False
+
+    def remove_favorite_track(self, track_id: str) -> bool:
+        self._not_implemented("remove_favorite_track")
+        return False
+
     def get_user_playlists(self) -> List[Playlist]:
         self._not_implemented("get_user_playlists")
         return []

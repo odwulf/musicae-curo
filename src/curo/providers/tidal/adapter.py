@@ -215,6 +215,40 @@ class TidalProvider(MusicProvider):
             raise
         return all_tracks
 
+    def add_favorite_track(self, track_id: str) -> bool:
+        """Add track to Tidal favorites."""
+        if not self.session or not self.session.user:
+            return False
+        favs = getattr(self.session.user, "favorites", None)
+        if not favs:
+            return False
+        try:
+            tid = str(track_id).strip()
+            if hasattr(favs, "add_track") and callable(favs.add_track):
+                res = favs.add_track(tid)
+                return bool(res) if res is not None else True
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to add track '{track_id}' to Tidal favorites: {e}")
+            return False
+
+    def remove_favorite_track(self, track_id: str) -> bool:
+        """Remove track from Tidal favorites."""
+        if not self.session or not self.session.user:
+            return False
+        favs = getattr(self.session.user, "favorites", None)
+        if not favs:
+            return False
+        try:
+            tid = str(track_id).strip()
+            if hasattr(favs, "remove_track") and callable(favs.remove_track):
+                res = favs.remove_track(tid)
+                return bool(res) if res is not None else True
+            return False
+        except Exception as e:
+            logger.warning(f"Failed to remove track '{track_id}' from Tidal favorites: {e}")
+            return False
+
     # --- Playlists & Folders ---
     def get_folders(self) -> List[Dict[str, Any]]:
         """Fetch all playlist folders owned by the authenticated user."""

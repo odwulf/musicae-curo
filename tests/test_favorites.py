@@ -12,6 +12,7 @@ from typer.testing import CliRunner
 from curo.cli import app, state
 from curo.config import ConfigManager
 from curo.core.models import Album, Artist, Playlist, Track
+from curo.core.provider import MusicProvider
 from curo.providers.deezer.adapter import DeezerProvider
 from curo.providers.spotify.adapter import SpotifyProvider
 from curo.providers.tidal.adapter import TidalProvider
@@ -417,3 +418,56 @@ def test_cli_favorites_commands(temp_config: ConfigManager, monkeypatch):
         assert res_export.exit_code == 0
         assert "Midnight City" in res_export.stdout
         assert "FR6V81100010" in res_export.stdout
+
+
+def test_snapshot_favorite_tracks_auto_relinking(temp_config: ConfigManager):
+    """Ensure that when a favorite track is removed by the provider due to catalog replacement,
+
+    Curo automatically detects the replacement and calls provider.add_favorite_track.
+    """
+    mock_provider = MagicMock(spec=MusicProvider)
+    mock_provider.name = "tidal"
+    mock_provider.display_name = "TIDAL"
+    mock_provider.add_favorite_track.return_value = True
+
+    t_old = Track(
+        id="185937955",
+        title="Kill Me",
+        provider="tidal",
+        duration_seconds=260,
+        artist=Artist(id="a1", name="Indigo De Souza"),
+        album=Album(id="alb1", title="Kill Me"),
+        isrc="US2U62131810",
+        available=True,
+    )
+    t_new = Track(
+        id="185938018",
+        title="Kill Me",
+        provider="tidal",
+        duration_seconds=260,
+        artist=Artist(id="a1", name="Indigo De Souza"),
+        album=Album(id="alb2", title="Any Shape You Take"),
+        isrc="US2U62131810",
+        available=True,
+    )
+
+    snap_svc = SnapshotService(mock_provider, cfg=temp_config)
+
+    # Initial baseline run with old track
+    mock_provider.get_favorite_tracks.return_value = [t_old]
+    res1 = snap_svc.snapshot_favorite_tracks()
+    assert res1["success"] is True
+
+    # Next run: provider dropped old track from favorites
+    # But get_track_replacement provides the new track!
+    mock_provider.get_favorite_tracks.side_effect = [
+        [],  # Provider currently returns 0 favorites (old one was dropped)
+        [t_new],  # After auto-relinking, refreshed favorites has t_new
+    ]
+    mock_provider.get_track_replacement.return_value = t_new
+
+    res2 = snap_svc.snapshot_favorite_tracks()
+    assert res2["success"] is True
+    # Verify add_favorite_track was called automatically
+    mock_provider.add_favorite_track.assert_called_once_with("185938018")
+    assert res2["track_count"] == 1

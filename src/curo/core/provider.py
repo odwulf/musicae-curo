@@ -53,6 +53,14 @@ class MusicProvider(ABC):
         """Fetch all favorite/liked tracks for the authenticated user with full pagination."""
         ...
 
+    def add_favorite_track(self, track_id: str) -> bool:
+        """Add a track to the user's favorite/liked tracks collection."""
+        return False
+
+    def remove_favorite_track(self, track_id: str) -> bool:
+        """Remove a track from the user's favorite/liked tracks collection."""
+        return False
+
     # --- Playlists ---
     @abstractmethod
     def get_user_playlists(self) -> List[Playlist]:
