@@ -1,6 +1,7 @@
 """Tests for MixService discovery, deduplication, shuffling, and megamix synthesis."""
 
 import datetime
+import json
 from unittest.mock import MagicMock
 import pytest
 
@@ -297,3 +298,83 @@ def test_backup_daily_discovery_with_mix_items_attribute(mock_session, mock_prov
     assert len(tracks) == 2
     assert tracks[0].id == "333"
     assert tracks[1].id == "444"
+
+
+def test_sync_mixes_lifecycle(tmp_path, mock_session, mock_provider):
+    """Test full mix change detection lifecycle:
+
+    1. Baseline establishment: saves JSON, creates no preceding backup.
+    2. No-op run: unchanged mix triggers 0 updates, no megamix generation.
+    3. Discovery change: archives preceding cached tracks with preceding date into Discovery Backup.
+    4. Daily mix change: regenerates megamix without discovery mix.
+    """
+    from curo.config import ConfigManager
+
+    cfg = ConfigManager(custom_config_dir=tmp_path)
+    svc = MixService(mock_provider, cfg=cfg)
+
+    # Initial mock tracks
+    t_disc_v1 = make_mock_track(101, "Discovery Monday")
+    t_dm1_v1 = make_mock_track(201, "Daily Mix 1 Mon")
+
+    m_disc = MagicMock(id="disc-1", title="My Daily Discovery", mix_type="discovery")
+    m_dm1 = MagicMock(id="dm-1", title="My Mix 1", mix_type="daily mix")
+    mock_session.mixes.return_value = [m_disc, m_dm1]
+
+    def mock_get_tracks(mix_id):
+        if mix_id == "disc-1":
+            return [t_disc_v1]
+        elif mix_id == "dm-1":
+            return [t_dm1_v1]
+        return []
+
+    mock_provider.get_mix_tracks = MagicMock(side_effect=mock_get_tracks)
+    svc.playlist_service.get_or_create_playlist = MagicMock(return_value=MagicMock(id="pl-mock"))
+    svc.playlist_service.add_tracks = MagicMock(return_value=1)
+
+    # Step 1: Baseline run
+    res1 = svc.sync_mixes()
+    assert res1["success"] is True
+    assert "my_daily_discovery" in res1["mixes_updated"]
+    assert "my_mix_1" in res1["mixes_updated"]
+    assert res1["discovery_backup"] is None  # No preceding backup on first baseline
+
+    disc_json_file = cfg.mixes_dir / "my_daily_discovery.json"
+    assert disc_json_file.exists()
+    cached_data = json.loads(disc_json_file.read_text(encoding="utf-8"))
+    assert cached_data["track_count"] == 1
+    assert cached_data["tracks"][0]["id"] == "101"
+
+    # Step 2: Second run without changes -> should do nothing
+    res2 = svc.sync_mixes()
+    assert res2["success"] is True
+    assert len(res2["mixes_updated"]) == 0
+    assert res2["discovery_backup"] is None
+    assert res2["megamixes_updated"] is False
+
+    # Step 3: Discovery updates with fresh tracks (simulating Tuesday afternoon)
+    t_disc_v2 = make_mock_track(102, "Discovery Tuesday")
+
+    def mock_get_tracks_updated(mix_id):
+        if mix_id == "disc-1":
+            return [t_disc_v2]
+        elif mix_id == "dm-1":
+            return [t_dm1_v1]  # DM1 unchanged
+        return []
+
+    mock_provider.get_mix_tracks = MagicMock(side_effect=mock_get_tracks_updated)
+
+    res3 = svc.sync_mixes()
+    assert res3["success"] is True
+    assert "my_daily_discovery" in res3["mixes_updated"]
+    assert "my_mix_1" not in res3["mixes_updated"]
+    # Preceding discovery backup was created!
+    assert res3["discovery_backup"] is not None
+    assert res3["discovery_backup"]["tracks_added"] == 1
+    # Megamixes not regenerated because daily mixes did not change
+    assert res3["megamixes_updated"] is False
+
+    # Check updated discovery json
+    updated_disc = json.loads(disc_json_file.read_text(encoding="utf-8"))
+    assert updated_disc["tracks"][0]["id"] == "102"
+

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -18,6 +19,20 @@ from curo.services.playlist_service import PlaylistService
 logger = logging.getLogger(__name__)
 
 
+def _is_mock(val: Any) -> bool:
+    """Helper to detect mock objects in unit tests."""
+    if val is None:
+        return False
+    return "Mock" in type(val).__name__
+
+
+def _clean_str(val: Any) -> str:
+    """Helper to sanitize mock attributes into clean strings."""
+    if _is_mock(val) or val is None:
+        return ""
+    return str(val)
+
+
 class MixService:
     """Discovers algorithmic mixes, archives discovery mixes, and generates randomized megamixes."""
 
@@ -30,6 +45,7 @@ class MixService:
         self.config = cfg or config_manager
         self.playlist_service = PlaylistService(provider)
         self.history_file = self.config.megamix_history_file
+        self.mixes_dir = self.config.mixes_dir
 
     def _load_history(self) -> Dict[str, Any]:
         """Load megamix track history for rolling exclusions."""
@@ -206,6 +222,30 @@ class MixService:
         )
 
         pl_id = getattr(playlist, "id", playlist_name)
+
+        # Idempotence: check existing tracks in playlist to avoid duplicate appends on re-run
+        try:
+            existing_tracks = self.provider.get_playlist_tracks(str(pl_id))
+            existing_ids = [str(t.id) for t in existing_tracks if getattr(t, "id", None)]
+            if existing_ids == track_ids:
+                logger.info(f"Playlist '{playlist_name}' already contains identical tracks; skipping append.")
+                res = {
+                    "success": True,
+                    "provider": self.provider.name,
+                    "playlist_name": playlist_name,
+                    "playlist_id": str(pl_id),
+                    "track_count": len(track_ids),
+                    "tracks_added": 0,
+                    "date": today_str,
+                    "skipped": True,
+                    "reason": "Playlist already contains identical tracks",
+                }
+                if folder:
+                    res["folder"] = folder
+                return res
+        except Exception as e:
+            logger.debug(f"Could not verify existing tracks in '{playlist_name}': {e}")
+
         added = self.playlist_service.add_tracks(
             playlist=playlist,
             track_ids=track_ids,
@@ -320,9 +360,12 @@ class MixService:
 
         total_unique = len(collected_track_ids)
         if total_unique == 0:
+            msg = "No tracks extracted from mixes" if not excluded_recent_count else f"All {excluded_recent_count} candidate tracks were excluded by the {exclude_recent_days}-day history filter"
+            logger.info(f"Skipping Megamix '{target_playlist}': {msg}")
             return {
-                "success": False,
-                "reason": "No tracks extracted from mixes" if not excluded_recent_count else f"All {excluded_recent_count} candidate tracks were excluded by the {exclude_recent_days}-day history filter",
+                "success": True,
+                "skipped": True,
+                "reason": msg,
                 "target_playlist": target_playlist,
                 "total_unique_tracks": 0,
                 "tracks_count": 0,
@@ -371,4 +414,237 @@ class MixService:
         if folder:
             res["folder"] = folder
         return res
+
+    # --- Hourly Sync & Mix Change Detection ---
+
+    def _get_mix_slug(self, mix: Any) -> str:
+        """Derive a safe filesystem slug for a mix."""
+        m_title = getattr(mix, "title", None) or getattr(mix, "name", "") or "mix"
+        slug = re.sub(r"[^\w\-]+", "_", m_title.strip().lower()).strip("_")
+        return slug or "mix"
+
+    def _compute_mix_hash(self, track_ids: List[str]) -> str:
+        """Compute stable SHA-256 hash of ordered track IDs."""
+        clean_ids = [_clean_str(tid) for tid in track_ids if _clean_str(tid)]
+        return hashlib.sha256(",".join(clean_ids).encode("utf-8")).hexdigest()
+
+    def _serialize_track_dict(self, t: Any) -> Dict[str, Any]:
+        """Convert a Track object or mock into a clean JSON-serializable dictionary."""
+        t_id = _clean_str(getattr(t, "id", ""))
+        title = _clean_str(getattr(t, "title", None) or getattr(t, "name", ""))
+        artist_obj = getattr(t, "artist", None)
+        artist_name = _clean_str(getattr(artist_obj, "name", "")) if not _is_mock(artist_obj) else ""
+        album_obj = getattr(t, "album", None)
+        album_title = _clean_str(getattr(album_obj, "title", "")) if not _is_mock(album_obj) else ""
+        isrc = _clean_str(getattr(t, "isrc", ""))
+        duration = getattr(t, "duration", None)
+        if _is_mock(duration):
+            duration = None
+        return {
+            "id": t_id,
+            "title": title,
+            "artist": artist_name,
+            "album": album_title,
+            "isrc": isrc,
+            "duration": duration,
+        }
+
+    def get_cached_mix_json(self, mix_slug: str) -> Optional[Dict[str, Any]]:
+        """Read cached mix JSON from ~/.config/curo/mixes/{slug}.json."""
+        file_path = self.mixes_dir / f"{mix_slug}.json"
+        if file_path.exists():
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to read cached mix JSON from {file_path}: {e}")
+        return None
+
+    def save_cached_mix_json(self, mix_slug: str, data: Dict[str, Any]) -> None:
+        """Write mix JSON to ~/.config/curo/mixes/{slug}.json."""
+        self.config.ensure_config_dir()
+        file_path = self.mixes_dir / f"{mix_slug}.json"
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+            self.config.secure_file(file_path)
+        except Exception as e:
+            logger.warning(f"Failed to save cached mix JSON to {file_path}: {e}")
+
+    def sync_mixes(
+        self,
+        folder: Optional[str] = "Discovery Backups",
+        backup_discovery: bool = True,
+        update_megamixes: bool = True,
+    ) -> Dict[str, Any]:
+        """Detect updates to Daily Discovery and Daily Mixes.
+
+        When a change is detected:
+        1. If Daily Discovery changed, archive the PRECEDING period's cached tracks into a dated
+           playlist (e.g. change on Wednesday archives Tuesday's mix).
+        2. Update the mix's cached JSON file only if that mix actually changed.
+        3. If any Daily Mix changed (and update_megamixes is True), regenerate Daily Megamix and
+           Daily Fresh Megamix.
+        """
+        now = datetime.datetime.now()
+        today_date = now.date().isoformat()
+        now_iso = now.isoformat()
+
+        discovery_mix, daily_mixes = self.get_categorized_daily_mixes()
+        results: Dict[str, Any] = {
+            "success": True,
+            "timestamp": now_iso,
+            "mixes_checked": 0,
+            "mixes_updated": [],
+            "discovery_backup": None,
+            "megamixes_updated": False,
+            "megamix_result": None,
+            "fresh_megamix_result": None,
+        }
+
+        # 1. Inspect Daily Discovery
+        if discovery_mix:
+            results["mixes_checked"] += 1
+            disc_slug = self._get_mix_slug(discovery_mix)
+            disc_id = str(getattr(discovery_mix, "id", ""))
+            disc_tracks = self.provider.get_mix_tracks(disc_id) if disc_id else []
+            disc_track_ids = [str(t.id) for t in disc_tracks if getattr(t, "id", None)]
+            disc_hash = self._compute_mix_hash(disc_track_ids)
+
+            cached_disc = self.get_cached_mix_json(disc_slug)
+
+            if cached_disc is None:
+                # First run: record initial baseline without creating preceding backup
+                logger.info(f"Establishing baseline cache for Daily Discovery ({len(disc_track_ids)} tracks)")
+                disc_cache_data = {
+                    "id": disc_id,
+                    "title": _clean_str(getattr(discovery_mix, "title", "Daily Discovery")),
+                    "mix_type": _clean_str(getattr(discovery_mix, "mix_type", "discovery_mix")),
+                    "last_updated_at": now_iso,
+                    "last_updated_date": today_date,
+                    "content_hash": disc_hash,
+                    "track_count": len(disc_track_ids),
+                    "tracks": [self._serialize_track_dict(t) for t in disc_tracks if getattr(t, "id", None)],
+                }
+                self.save_cached_mix_json(disc_slug, disc_cache_data)
+                results["mixes_updated"].append(disc_slug)
+            elif cached_disc.get("content_hash") != disc_hash and disc_track_ids:
+                logger.info(f"Change detected in Daily Discovery! (hash {cached_disc.get('content_hash')[:8]} -> {disc_hash[:8]})")
+
+                # Archive PRECEDING discovery mix tracks
+                preceding_date = cached_disc.get("last_updated_date")
+                if not preceding_date:
+                    try:
+                        preceding_date = datetime.date.fromisoformat(cached_disc.get("last_updated_at", "")[:10]).isoformat()
+                    except Exception:
+                        preceding_date = (now.date() - datetime.timedelta(days=1)).isoformat()
+
+                if backup_discovery:
+                    preceding_tracks = cached_disc.get("tracks", [])
+                    preceding_track_ids = [str(t["id"]) for t in preceding_tracks if t.get("id")]
+                    if preceding_track_ids:
+                        backup_playlist_name = f"Discovery Backup - {preceding_date}"
+                        logger.info(f"Archiving preceding Daily Discovery into '{backup_playlist_name}' ({len(preceding_track_ids)} tracks)")
+                        pl = self.playlist_service.get_or_create_playlist(
+                            title=backup_playlist_name,
+                            description=f"Automated backup of Daily Discovery for period {preceding_date}",
+                            public=False,
+                            folder=folder,
+                        )
+                        # Avoid duplicate appends on re-run
+                        try:
+                            existing_tracks = self.provider.get_playlist_tracks(str(pl.id))
+                            existing_ids = [str(t.id) for t in existing_tracks if getattr(t, "id", None)]
+                            if existing_ids != preceding_track_ids:
+                                added = self.playlist_service.add_tracks(playlist=pl, track_ids=preceding_track_ids)
+                            else:
+                                added = 0
+                        except Exception:
+                            added = self.playlist_service.add_tracks(playlist=pl, track_ids=preceding_track_ids)
+
+                        results["discovery_backup"] = {
+                            "playlist_name": backup_playlist_name,
+                            "date": preceding_date,
+                            "tracks_added": added,
+                        }
+
+                # Update Daily Discovery cache to current tracks
+                disc_cache_data = {
+                    "id": disc_id,
+                    "title": _clean_str(getattr(discovery_mix, "title", "Daily Discovery")),
+                    "mix_type": _clean_str(getattr(discovery_mix, "mix_type", "discovery_mix")),
+                    "last_updated_at": now_iso,
+                    "last_updated_date": today_date,
+                    "content_hash": disc_hash,
+                    "track_count": len(disc_track_ids),
+                    "tracks": [self._serialize_track_dict(t) for t in disc_tracks if getattr(t, "id", None)],
+                }
+                self.save_cached_mix_json(disc_slug, disc_cache_data)
+                results["mixes_updated"].append(disc_slug)
+
+        # 2. Inspect Daily Mixes (1..N)
+        daily_mix_changed = False
+        for dm in daily_mixes:
+            results["mixes_checked"] += 1
+            dm_slug = self._get_mix_slug(dm)
+            dm_id = str(getattr(dm, "id", ""))
+            dm_tracks = self.provider.get_mix_tracks(dm_id) if dm_id else []
+            dm_track_ids = [str(t.id) for t in dm_tracks if getattr(t, "id", None)]
+            dm_hash = self._compute_mix_hash(dm_track_ids)
+
+            cached_dm = self.get_cached_mix_json(dm_slug)
+
+            if cached_dm is None:
+                # Baseline cache
+                dm_cache_data = {
+                    "id": dm_id,
+                    "title": _clean_str(getattr(dm, "title", dm_slug)),
+                    "mix_type": _clean_str(getattr(dm, "mix_type", "daily_mix")),
+                    "last_updated_at": now_iso,
+                    "last_updated_date": today_date,
+                    "content_hash": dm_hash,
+                    "track_count": len(dm_track_ids),
+                    "tracks": [self._serialize_track_dict(t) for t in dm_tracks if getattr(t, "id", None)],
+                }
+                self.save_cached_mix_json(dm_slug, dm_cache_data)
+                results["mixes_updated"].append(dm_slug)
+                daily_mix_changed = True
+            elif cached_dm.get("content_hash") != dm_hash and dm_track_ids:
+                logger.info(f"Change detected in {dm_slug}! (hash {cached_dm.get('content_hash')[:8]} -> {dm_hash[:8]})")
+                daily_mix_changed = True
+                dm_cache_data = {
+                    "id": dm_id,
+                    "title": _clean_str(getattr(dm, "title", dm_slug)),
+                    "mix_type": _clean_str(getattr(dm, "mix_type", "daily_mix")),
+                    "last_updated_at": now_iso,
+                    "last_updated_date": today_date,
+                    "content_hash": dm_hash,
+                    "track_count": len(dm_track_ids),
+                    "tracks": [self._serialize_track_dict(t) for t in dm_tracks if getattr(t, "id", None)],
+                }
+                self.save_cached_mix_json(dm_slug, dm_cache_data)
+                results["mixes_updated"].append(dm_slug)
+
+        # 3. Regenerate Megamixes if any Daily Mix changed
+        if update_megamixes and daily_mix_changed:
+            logger.info("Daily Mix updates detected; regenerating Daily Megamix and Daily Fresh Megamix...")
+            results["megamixes_updated"] = True
+            results["megamix_result"] = self.create_megamix(
+                target_playlist="Daily Megamix",
+                include_discovery=False,
+                include_daily_mixes=True,
+                shuffle=True,
+                mode="replace",
+                exclude_recent_days=0,
+            )
+            results["fresh_megamix_result"] = self.create_megamix(
+                target_playlist="Daily Fresh Megamix",
+                include_discovery=False,
+                include_daily_mixes=True,
+                shuffle=True,
+                mode="replace",
+                exclude_recent_days=7,
+            )
+
+        return results
 

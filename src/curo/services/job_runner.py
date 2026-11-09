@@ -88,7 +88,13 @@ class JobRunner:
             logger.info(f"Running action {idx}/{len(actions)}: {action_type} with params={params}")
 
             try:
-                if action_type == "backup_daily_discovery":
+                if action_type == "sync_mixes":
+                    res = mix_service.sync_mixes(
+                        folder=folder,
+                        backup_discovery=params.get("backup_discovery", True),
+                        update_megamixes=params.get("update_megamixes", True),
+                    )
+                elif action_type == "backup_daily_discovery":
                     res = mix_service.backup_daily_discovery(
                         playlist_name_format=params.get("playlist_name_format", "Discovery Backup - {date}"),
                         description=params.get("description", f"Automated daily backup of {self.provider.display_name} Daily Discovery"),

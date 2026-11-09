@@ -113,7 +113,7 @@ def test_run_fresh_megamix_job(tmp_path: Path):
         assert res["actions_executed"] == 1
         mix_inst.create_megamix.assert_called_once_with(
             target_playlist="Daily Fresh Megamix",
-            include_discovery=True,
+            include_discovery=False,
             include_daily_mixes=True,
             shuffle=True,
             mode="replace",

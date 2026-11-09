@@ -11,13 +11,22 @@ from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 
 DEFAULT_JOBS_YAML = """# Musicae Curo (curo) automated job definitions
-# Schedulable via cron: e.g. run daily at 06:00 UTC:
-# 0 6 * * * /path/to/curo job run daily-discovery-megamix --quiet
+# Schedulable via cron: e.g. run hourly to detect mix updates:
+# 0 * * * * /path/to/curo job run hourly-mix-sync --quiet
 #
 # Note: You can specify a destination playlist 'folder' (e.g. 'Discovery Backups')
 # either at the job level (default for actions in the job) or per action under 'params:'.
 
 jobs:
+  hourly-mix-sync:
+    description: "Hourly check for mix updates: archives previous discovery mix and regenerates megamixes on change"
+    actions:
+      - action: sync_mixes
+        params:
+          folder: "Discovery Backups"
+          backup_discovery: true
+          update_megamixes: true
+
   daily-discovery-megamix:
     description: "Backup all daily mixes and build a randomized daily megamix"
     actions:
@@ -29,7 +38,7 @@ jobs:
       - action: create_megamix
         params:
           target_playlist: "Daily Megamix"
-          include_discovery: true
+          include_discovery: false
           include_daily_mixes: true
           shuffle: true
           mode: "replace" # 'replace' wipes previous megamix content; 'append' adds to it
@@ -42,7 +51,7 @@ jobs:
       - action: create_megamix
         params:
           target_playlist: "Daily Fresh Megamix"
-          include_discovery: true
+          include_discovery: false
           include_daily_mixes: true
           shuffle: true
           mode: "replace"
@@ -126,6 +135,7 @@ class ConfigManager:
         self.alerts_log_file = self.logs_dir / "availability_alerts.log"
         self.notification_state_file = self.config_dir / "notification_state.json"
         self.megamix_history_file = self.config_dir / "megamix_history.json"
+        self.mixes_dir = self.config_dir / "mixes"
 
     def get_provider_session_file(self, provider_name: str) -> Path:
         """Return the path to the session credentials file for a specific provider."""
@@ -142,6 +152,7 @@ class ConfigManager:
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.snapshots_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
+        self.mixes_dir.mkdir(parents=True, exist_ok=True)
         if sys.platform != "win32":
             try:
                 os.chmod(self.config_dir, 0o700)

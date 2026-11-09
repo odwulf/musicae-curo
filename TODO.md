@@ -1,0 +1,3 @@
+ - [x] **Check discovery backup duplicates**: Is because of a timing issue, or is it because it hasn't been updated by Tidal?
+ - [ ] **How to handle replaced files in favourites**: $nov. update: 185937955 has been replaced by 185937955, relinked in a playlist. But it has just been removed from favourites tracks, not replaced. Still, it stays in the favourites backup playlist. I favourited manually 185937955. The day after, Curo tells me that the title has been added to favourites, and removed from favourites backup. The day after that, it's now been re-added to the favourites backup. There should be a better way to handle that.
+ - [ ] **Add From: name to sent mail.** 
