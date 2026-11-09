@@ -104,6 +104,7 @@ class EmailConfig(BaseModel):
     use_tls: bool = Field(default=True, description="Enable STARTTLS encryption")
     use_ssl: bool = Field(default=False, description="Enable direct SSL encryption")
     from_address: Optional[str] = Field(default=None, description="Sender email address")
+    from_name: Optional[str] = Field(default="Musicae Curo", description="Sender display name (e.g. Musicae Curo)")
     to_address: Optional[str] = Field(default=None, description="Recipient email address (or comma-separated list)")
     send_on_changes: bool = Field(default=True, description="Send email when a playlist modification is detected")
     send_on_alerts: bool = Field(default=True, description="Send email when an unavailable track alert is detected")
@@ -239,6 +240,8 @@ class ConfigManager:
                 cfg_dict["use_ssl"] = os.environ[f"{env_prefix}SMTP_SSL"].lower() in ("1", "true", "yes")
             if f"{env_prefix}EMAIL_FROM" in os.environ:
                 cfg_dict["from_address"] = os.environ[f"{env_prefix}EMAIL_FROM"]
+            if f"{env_prefix}EMAIL_FROM_NAME" in os.environ:
+                cfg_dict["from_name"] = os.environ[f"{env_prefix}EMAIL_FROM_NAME"]
             if f"{env_prefix}EMAIL_TO" in os.environ:
                 cfg_dict["to_address"] = os.environ[f"{env_prefix}EMAIL_TO"]
             if f"{env_prefix}EXCLUDE_MEGAMIX_DIFF" in os.environ:

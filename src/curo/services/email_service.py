@@ -65,7 +65,10 @@ class EmailService:
             logger.info("Email notifications not configured (smtp_host or to_address missing).")
             return False
 
-        sender = self.email_config.from_address or self.email_config.smtp_user or "curo@localhost"
+        sender_addr = self.email_config.from_address or self.email_config.smtp_user or "curo@localhost"
+        from_name = (self.email_config.from_name or "").strip()
+        from_header = f"{from_name} <{sender_addr}>" if from_name else sender_addr
+
         target_recipients = recipients or [r.strip() for r in self.email_config.to_address.split(",") if r.strip()]
 
         if not target_recipients:
@@ -74,7 +77,7 @@ class EmailService:
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = sender
+        msg["From"] = from_header
         msg["To"] = ", ".join(target_recipients)
         msg["Date"] = datetime.datetime.now(datetime.timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000")
 
@@ -101,7 +104,7 @@ class EmailService:
                 if self.email_config.smtp_user and self.email_config.smtp_password:
                     server.login(self.email_config.smtp_user, self.email_config.smtp_password)
 
-                server.sendmail(sender, target_recipients, msg.as_string())
+                server.sendmail(sender_addr, target_recipients, msg.as_string())
                 logger.info(f"Notification email successfully sent to {target_recipients} ('{subject}')")
                 return True
 

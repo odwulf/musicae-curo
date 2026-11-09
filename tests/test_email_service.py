@@ -109,6 +109,7 @@ def test_smtp_delivery_with_mocks(temp_config: ConfigManager):
         assert args[0] == "bot@test.com"
         assert args[1] == ["me@test.com"]
         assert "Subject: Test Subject" in args[2]
+        assert "From: Musicae Curo <bot@test.com>" in args[2]
 
 
 def test_render_all_playlists_report_contains_metrics_and_inventory(temp_config: ConfigManager):
