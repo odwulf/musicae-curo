@@ -182,6 +182,7 @@ Musicae Curo manages its configuration and state in a secure dedicated directory
 | `~/.config/curo/spotify_session.json` | OAuth token cache for Spotify adapter | `0600` (`rw-------`) |
 | `~/.config/curo/deezer_session.json` | OAuth/Access token cache for Deezer adapter | `0600` (`rw-------`) |
 | `~/.config/curo/megamix_history.json` | Rolling daily mix track history for fresh-only filtering | `0600` (`rw-------`) |
+| `~/.config/curo/mixes/` | Cached JSON representations and hashes of algorithmic mixes | `0700` (`rwx------`) |
 | `~/.config/curo/snapshots/<slug>/` | Incremental versioned SHA-256 JSON backups | `0700` (`rwx------`) |
 | `~/.config/curo/track_registry.json` | Historical healthy track metadata registry | `0600` (`rw-------`) |
 | `~/.config/curo/availability_alerts.log` | Append-only log of delisted tracks | `0600` (`rw-------`) |
@@ -198,6 +199,16 @@ Tidal and other streaming providers dynamically generate daily mixes depending o
 - Matches `My Daily Discovery` by mix type (`DISCOVERY_MIX`) or keyword.
 - Identifies all `Daily Mix N` instances, naturally sorting numbers (`Daily Mix 2` before `Daily Mix 10`).
 - Discards non-audio mixes (e.g. video mixes).
+
+### Hourly Change Detection & Synchronous Archiving (`sync_mixes`)
+Algorithmic streaming mixes (such as TIDAL's Daily Discovery) typically refresh dynamically midway through the day (e.g. around 12:00–14:00 local time). Running backups on a rigid once-a-day schedule creates window-offset hazards where a day's mix could be overwritten before being archived.
+
+`MixService.sync_mixes` addresses this via proactive hourly change detection:
+1. **Hourly Hash & Content Check**: Queries live algorithmic mixes and computes a SHA-256 fingerprint for each mix.
+2. **Local Mix JSON Caching (`~/.config/curo/mixes/`)**: Stores `{slug}.json` containing the tracks, timestamp, and hash whenever a mix updates.
+3. **Preceding Period Archiving**: When a change in `My Daily Discovery` is detected, Curo archives the **preceding period's** discovery mix (from the local cache) under the preceding date (e.g. Wednesday 14:00 detection archives Tuesday's mix with Tuesday's date, or Monday's date if it is the first update since Monday).
+4. **Idempotent Backup Guarantee**: Verifies whether an archive playlist for that date already exists, avoiding duplicate backups.
+5. **Automatic Megamix Regeneration**: Rebuilds `Daily Megamix` and `Daily Fresh Megamix` immediately whenever any daily mix is updated. Note that `Daily Discovery` is intentionally separated from the Megamixes to preserve distinct listening contexts.
 
 ### Daily Megamix & Deduplication Pipeline
 1. **Harvesting**: Gathers all tracks from `My Daily Discovery` and all `Daily Mixes`.
@@ -233,6 +244,7 @@ When streaming services delist or retire a track, its metadata (such as ISRC or 
 In addition to caching historical ISRCs, UPC barcodes, and release dates:
 - **Proactive Recording**: During routine playlist snapshots, `SnapshotService` inspects provider replacement relationships (e.g. TIDAL's OpenAPI `replaceMedia=items`). When a provider silently links an active or superseded track to a replacement release under the hood, Curo records `provider_replacement_id` and `has_provider_replacement: true` into the registry immediately, before the original track ever goes missing.
 - **Reactive Fallback**: If an unavailable track is detected without prior proactive cache, `SnapshotService` queries `get_track_replacement(track_id)` directly, recording the official replacement ID in the availability alert and morning email digest.
+- **Automatic Favorite Relinking**: When snapshotting favorite tracks, if a removed track is identified with an official provider replacement, Curo automatically relinks the replacement to your favorites via the provider SPI (`add_favorite_track`), seamlessly repairing your library in the background.
 
 ---
 
@@ -332,6 +344,7 @@ jobs:
 
 | Action Type | Description | Available Parameters |
 | :--- | :--- | :--- |
+| `sync_mixes` | Hourly check for mix changes: archives preceding discovery mix and regenerates megamixes on change. | - `folder` (optional: destination folder name or ID)<br>- `backup_discovery` (bool, default: `true`)<br>- `update_megamixes` (bool, default: `true`) |
 | `backup_daily_discovery` | Archives today's algorithmic Daily Discovery mix into a dated playlist. | - `playlist_name_format` (default: `"Discovery Backup - {date}"`)<br>- `description` (optional custom playlist description)<br>- `folder` (optional: destination folder name or ID) |
 | `create_megamix` | Merges Daily Discovery and all active Daily Mixes into a single deduplicated, shuffled playlist. | - `target_playlist` (default: `"Daily Megamix"`)<br>- `include_discovery` (bool, default: `true`)<br>- `include_daily_mixes` (bool, default: `true`)<br>- `shuffle` (bool, default: `true`)<br>- `mode` (`replace` or `append`, default: `replace`)<br>- `description` (template string)<br>- `limit` (optional integer limit)<br>- `exclude_recent_days` (integer, default: 0)<br>- `folder` (optional: destination folder name or ID) |
 | `snapshot_all_playlists` | Runs SHA-256 versioned snapshots across all personal playlists, updates track history registry, checks track availability, and sends email notifications. | - `alert_on_unavailable` (bool, default: `true`)<br>- `notify` (bool, default: `true`)<br>- `force_all_mail` (bool, default: `false`) |
@@ -348,17 +361,27 @@ When first initialized, `curo` configures two standard jobs:
 
 ```yaml
 jobs:
+  hourly-mix-sync:
+    description: "Hourly check for mix updates: archives previous discovery mix and regenerates megamixes on change"
+    actions:
+      - action: sync_mixes
+        params:
+          folder: "Discovery Backups"
+          backup_discovery: true
+          update_megamixes: true
+
   daily-discovery-megamix:
-    description: "Backup all daily mixes and build a randomized daily megamix (wiped fresh daily)"
+    description: "Backup all daily mixes and build a randomized daily megamix"
     actions:
       - action: backup_daily_discovery
         params:
           playlist_name_format: "Discovery Backup - {date}"
           description: "Automated daily backup of Daily Discovery"
+          folder: "Discovery Backups"
       - action: create_megamix
         params:
           target_playlist: "Daily Megamix"
-          include_discovery: true
+          include_discovery: false
           include_daily_mixes: true
           shuffle: true
           mode: "replace"
@@ -371,20 +394,12 @@ jobs:
       - action: create_megamix
         params:
           target_playlist: "Daily Fresh Megamix"
-          include_discovery: true
+          include_discovery: false
           include_daily_mixes: true
           shuffle: true
           mode: "replace"
           exclude_recent_days: 7
           description: "Fresh daily mix tunes not heard in the last 7 days - updated on {date}"
-
-  daily-playlist-backup:
-    description: "Daily versioned snapshot of all personal playlists with availability alerts"
-    actions:
-      - action: snapshot_all_playlists
-        params:
-          alert_on_unavailable: true
-          notify: false
 
   daily-favorites-backup:
     description: "Daily versioned snapshot and playlist mirror of all favorite/liked tracks"
@@ -397,6 +412,14 @@ jobs:
           target_playlist: "Favorites Backup"
           mode: "replace"
           description: "Automated daily backup of favorite/liked tracks"
+
+  daily-playlist-backup:
+    description: "Daily versioned snapshot of all personal playlists with availability alerts"
+    actions:
+      - action: snapshot_all_playlists
+        params:
+          alert_on_unavailable: true
+          notify: false
 
   daily-digest:
     description: "Dispatch unified daily email digest with playlist changes, availability alerts, and follower reach"
@@ -416,10 +439,18 @@ Musicae Curo can automatically output the correct crontab entry for any declared
 curo job cron-help --job daily-discovery-megamix
 ```
 
-Example crontab entry:
+Example crontab schedule:
 ```crontab
-# Run daily at 06:00 UTC with progress bars suppressed and logs piped to cron.log
-0 6 * * * /usr/bin/python3 -m curo.cli job run daily-discovery-megamix --quiet >> ~/.config/curo/cron.log 2>&1
+# 1. Hourly check for TIDAL algorithmic mix updates:
+#    Archives previous discovery mix and regenerates megamixes whenever TIDAL updates.
+0 * * * * /usr/bin/python3 -m curo.cli job run hourly-mix-sync --quiet >> ~/.config/curo/cron.log 2>&1
+
+# 2. Daily morning backups & snapshots (favorites backup runs before playlist snapshot):
+15 6 * * * /usr/bin/python3 -m curo.cli job run daily-favorites-backup --quiet >> ~/.config/curo/cron.log 2>&1
+30 6 * * * /usr/bin/python3 -m curo.cli job run daily-playlist-backup --quiet >> ~/.config/curo/cron.log 2>&1
+
+# 3. Morning digest:
+0 7 * * * /usr/bin/python3 -m curo.cli job run daily-digest --quiet >> ~/.config/curo/cron.log 2>&1
 ```
 
 ### Multi-Account & Multi-User Setup (Running Multiple Streaming Accounts)
@@ -431,6 +462,7 @@ All credentials and runtime data are strictly self-contained within the designat
 * **OAuth Credentials**: `<config_dir>/<provider>_session.json` (e.g., `tidal_session.json`).
 * **Declarative Jobs**: `<config_dir>/jobs.yaml`.
 * **Playlists & Track Registry**: `<config_dir>/snapshots/` and `<config_dir>/snapshots/index.json`.
+* **Algorithmic Mix Snapshots & Hashes**: `<config_dir>/mixes/`.
 * **Megamix Deduplication History**: `<config_dir>/megamix_history.json`.
 * **Logs & Alerts**: `<config_dir>/curo.log` and `<config_dir>/logs/availability_alerts.log`.
 * **Email & App Configuration**: `<config_dir>/config.json` and `<config_dir>/notification_state.json`.
@@ -562,14 +594,6 @@ curo mix daily [--format <template>] [--folder <name|id>]
 curo mix megamix [--target <title>] [--mode replace|append] [--exclude-recent-days <N>] [--folder <name|id>]
 ```
 
-### Favorites (`curo favorites`)
-```bash
-curo favorites list [--limit <N>]
-curo favorites snapshot [--no-alert]
-curo favorites backup [--target <title>] [--mode replace|append] [--folder <name|id>]
-curo favorites export [--format json|m3u8|csv] [--output <path>]
-```
-
 ### Automated Jobs (`curo job`)
 ```bash
 curo job list                                   # List defined jobs in jobs.yaml
@@ -579,7 +603,7 @@ curo job cron-help                              # Generate Linux crontab syntax
 
 ### Notifications (`curo notify`)
 ```bash
-curo notify config --host <smtp> --port <port> [--tls/--ssl] --user <user> --password <pass> --to-addr <email> [--exclude-megamix-diff/--include-megamix-diff]
+curo notify config --host <smtp> --port <port> [--tls/--ssl] --user <user> --password <pass> --to-addr <email> [--from-name <name>] [--exclude-megamix-diff/--include-megamix-diff]
 curo notify test                # Verify SMTP delivery
 curo notify send [--all]        # Dispatch notification manually
 curo notify digest [--send-when-no-changes] # Aggregate daily diffs, alerts & followers into digest

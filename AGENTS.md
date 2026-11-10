@@ -115,6 +115,7 @@ To implement a new streaming provider (e.g. Deezer or Spotify):
 2. Subclass `MusicProvider` from `curo.core.provider`.
 3. Implement required methods:
    - Authentication: `login`, `logout`, `get_auth_info`, `is_authenticated`.
+   - Favorites / Liked Songs: `get_favorite_tracks`, `add_favorite_track`, `remove_favorite_track`.
    - Playlists: `get_user_playlists`, `get_playlist`, `get_playlist_tracks`, `create_playlist`, `add_tracks_to_playlist`, `remove_track_from_playlist_by_index`.
    - Search & Lookup: `get_track`, `get_tracks_by_isrc`, `get_album`, `get_albums_by_barcode`, `get_album_tracks`, `search_tracks`.
    - Algorithmic Mixes: `get_daily_discovery_mix`, `get_daily_mixes`.

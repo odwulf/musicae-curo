@@ -19,17 +19,19 @@ Musicae Curo (*Latin: "I care for music"*) is a modular, provider-agnostic music
   - Dynamic adapter registry (`ProviderRegistry`) supporting runtime switching via `-p / --provider <name>`.
   - **Tidal**, **Spotify**, and **Deezer**: Fully functional and active out of the box.
   - **Qobuz** and **YouTube Music**: Scaffolded interface stubs ready for community contribution and future implementation.
-- **Dynamic Mix Discovery**:
+- **Dynamic Mix Discovery & Hourly Change Sync**:
   - Automatically queries and discovers Daily Mixes, plus *Daily Discovery*.
+  - Hourly change detection (`sync_mixes`) detects when streaming platforms refresh algorithmic mixes midday, caches mix states locally as JSON, archives the preceding period's discovery mix under its correct date, and rebuilds megamixes automatically.
 - **Automated Daily Megamix & Archiving**:
   - Deduplicates tracks across all mixes using both Track IDs and ISRCs.
   - Generates dated snapshots (`Discovery Backup - YYYY-MM-DD`).
-  - Shuffles and aggregates into a randomized `Daily Megamix` playlist (`replace` or `append` modes).
+  - Shuffles and aggregates daily mix tunes into randomized `Daily Megamix` and `Daily Fresh Megamix` playlists (`replace` or `append` modes).
 - **Playlist Versioning, SHA-256 Snapshots & Availability Alerting**:
   - Tracks content changes using cryptographic SHA-256 hashes.
   - Saves incremental versioned JSON backups only when modifications are detected.
   - Builds a historical healthy track registry (`track_registry.json`) to retain ISRCs, album UPCs, and release dates even after songs are delisted by streaming platforms.
   - Automatically records delisted tracks to `availability_alerts.log`.
+  - Automatically relinks removed tracks in favorites when streaming platforms publish official replacements.
 - **Intelligent Playlist Repair & Track Replacement**:
   - Scans playlists for retired or unavailable tracks.
   - Multi-tiered candidate discovery across ISRC sound codes, Album UPC barcodes, and normalized fuzzy metadata.
@@ -114,7 +116,7 @@ uv run curo playlist alerts
 # List all liked/favorite tracks with seamless pagination (handles full catalog)
 uv run curo favorites list
 
-# Snapshot favorite tracks with cryptographic SHA-256 change detection & alerts
+# Snapshot favorite tracks with cryptographic SHA-256 change detection, alerts, and auto-relink
 uv run curo favorites snapshot
 
 # Mirror all favorite tracks into a regular streaming playlist
@@ -138,8 +140,8 @@ uv run curo playlist replace "My Favorites" --track "#4" --with USSM18200001 --l
 
 ### 6. Email Notifications (Daily Change Digest & Baseline)
 ```bash
-# Configure SMTP credentials (e.g. port 25 with STARTTLS)
-uv run curo notify config --host mail.myserver.org --port 25 --tls --user me@myserver.org --password secret --to-addr me@myserver.org
+# Configure SMTP credentials (e.g. port 25 with STARTTLS and custom sender display name)
+uv run curo notify config --host mail.myserver.org --port 25 --tls --user me@myserver.org --password secret --to-addr me@myserver.org --from-name "Musicae Curo"
 
 # Verify SMTP connectivity
 uv run curo notify test
