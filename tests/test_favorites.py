@@ -64,7 +64,7 @@ def test_tidal_get_favorite_tracks_pagination(temp_config: ConfigManager):
     page1 = [_make_mock_tidal_track(i, f"Track {i}") for i in range(1, 101)]
     page2 = [_make_mock_tidal_track(i, f"Track {i}") for i in range(101, 136)]
 
-    def mock_tracks(limit=100, offset=0):
+    def mock_tracks(limit=100, offset=0, **kwargs):
         if offset == 0:
             return page1
         elif offset == 100:
@@ -79,9 +79,10 @@ def test_tidal_get_favorite_tracks_pagination(temp_config: ConfigManager):
     assert tracks[0].id == "1"
     assert tracks[134].id == "135"
     assert session_mock.user.favorites.tracks.call_count == 3
-    session_mock.user.favorites.tracks.assert_any_call(limit=100, offset=0)
-    session_mock.user.favorites.tracks.assert_any_call(limit=100, offset=100)
-    session_mock.user.favorites.tracks.assert_any_call(limit=100, offset=200)
+    # Check that calls were made with limit and offset (and order params if passed)
+    for c in session_mock.user.favorites.tracks.call_args_list:
+        assert c.kwargs["limit"] == 100
+    assert {c.kwargs["offset"] for c in session_mock.user.favorites.tracks.call_args_list} == {0, 100, 200}
 
 
 def test_tidal_get_favorite_tracks_handles_short_page_filtering(temp_config: ConfigManager):
@@ -96,7 +97,7 @@ def test_tidal_get_favorite_tracks_handles_short_page_filtering(temp_config: Con
     # Page 2 has 40 tracks
     page2 = [_make_mock_tidal_track(i, f"Track {i}") for i in range(88, 128)]
 
-    def mock_tracks(limit=100, offset=0):
+    def mock_tracks(limit=100, offset=0, **kwargs):
         if offset == 0:
             return page1
         elif offset == 100:
@@ -110,8 +111,9 @@ def test_tidal_get_favorite_tracks_handles_short_page_filtering(temp_config: Con
     assert len(tracks) == 127
     assert tracks[0].id == "1"
     assert tracks[-1].id == "127"
-    session_mock.user.favorites.tracks.assert_any_call(limit=100, offset=0)
-    session_mock.user.favorites.tracks.assert_any_call(limit=100, offset=100)
+    for c in session_mock.user.favorites.tracks.call_args_list:
+        assert c.kwargs["limit"] == 100
+    assert {c.kwargs["offset"] for c in session_mock.user.favorites.tracks.call_args_list} == {0, 100}
 
 
 def test_spotify_get_favorite_tracks_pagination(temp_config: ConfigManager):

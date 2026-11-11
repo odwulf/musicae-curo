@@ -194,11 +194,26 @@ class TidalProvider(MusicProvider):
                 pass
 
         try:
+            order_param = getattr(tidalapi.user.ItemOrder, "Date", None) if hasattr(tidalapi, "user") and hasattr(tidalapi.user, "ItemOrder") else None
+            order_dir_param = getattr(tidalapi.user.OrderDirection, "Ascending", None) if hasattr(tidalapi, "user") and hasattr(tidalapi.user, "OrderDirection") else None
+        except Exception:
+            order_param = None
+            order_dir_param = None
+
+        try:
             consecutive_empty = 0
             while True:
                 if total_count is not None and offset >= total_count:
                     break
-                page = favs.tracks(limit=limit, offset=offset)
+                kwargs: Dict[str, Any] = {"limit": limit, "offset": offset}
+                if order_param is not None and order_dir_param is not None:
+                    kwargs["order"] = order_param
+                    kwargs["order_direction"] = order_dir_param
+                try:
+                    page = favs.tracks(**kwargs)
+                except TypeError:
+                    # Fallback for mock or client without order params
+                    page = favs.tracks(limit=limit, offset=offset)
                 if not page:
                     consecutive_empty += 1
                     if consecutive_empty >= 2 or total_count is None or offset >= total_count:
