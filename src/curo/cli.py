@@ -263,7 +263,7 @@ def playlist_list(
 ) -> None:
     """List all user playlists."""
     p = get_active_provider(provider, require_active=True)
-    svc = PlaylistService(p)
+    svc = PlaylistService(p, cfg=state["config"])
     playlists = svc.list_playlists()
 
     if state["json_mode"]:
@@ -288,7 +288,7 @@ def playlist_show(
 ) -> None:
     """Inspect tracks in a playlist."""
     p = get_active_provider(provider, require_active=True)
-    svc = PlaylistService(p)
+    svc = PlaylistService(p, cfg=state["config"])
     try:
         pl = svc.get_playlist(identifier)
         if not pl:
@@ -337,7 +337,7 @@ def playlist_create(
 ) -> None:
     """Create a new playlist."""
     p = get_active_provider(provider, require_active=True)
-    svc = PlaylistService(p)
+    svc = PlaylistService(p, cfg=state["config"])
     res = svc.create_playlist(title=title, description=desc, public=public, folder=folder)
     pl_id = getattr(res, "id", "")
     if state["json_mode"]:
@@ -356,7 +356,7 @@ def playlist_folders(
 ) -> None:
     """List playlist folders in your library."""
     p = get_active_provider(provider, require_active=True)
-    svc = PlaylistService(p)
+    svc = PlaylistService(p, cfg=state["config"])
     folders = svc.get_folders()
     if state["json_mode"]:
         console.print_json(data=folders)
@@ -381,7 +381,7 @@ def playlist_move(
 ) -> None:
     """Move an existing playlist into a folder."""
     p = get_active_provider(provider, require_active=True)
-    svc = PlaylistService(p)
+    svc = PlaylistService(p, cfg=state["config"])
     pl = svc.get_playlist(identifier)
     if not pl:
         err_console.print(f"[bold red]Playlist not found: {identifier}[/bold red]")
@@ -407,7 +407,7 @@ def playlist_export(
 ) -> None:
     """Export playlist metadata to JSON, M3U8, or CSV."""
     p = get_active_provider(provider, require_active=True)
-    svc = PlaylistService(p)
+    svc = PlaylistService(p, cfg=state["config"])
     try:
         content = svc.export_playlist(identifier, export_format=format)
         if output:
@@ -1302,7 +1302,7 @@ def favorites_backup(
 ) -> None:
     """Mirror favorite/liked tracks into a regular playlist."""
     p = get_active_provider(provider, require_active=True)
-    svc = PlaylistService(p)
+    svc = PlaylistService(p, cfg=state["config"])
     try:
         res = svc.backup_favorites_to_playlist(target_playlist=target, mode=mode, description=description, folder=folder)
     except Exception as e:
@@ -1332,7 +1332,7 @@ def favorites_export(
 ) -> None:
     """Export favorite/liked tracks to JSON, M3U8, or CSV."""
     p = get_active_provider(provider, require_active=True)
-    svc = PlaylistService(p)
+    svc = PlaylistService(p, cfg=state["config"])
     try:
         content = svc.export_favorites(export_format=format)
         if output:

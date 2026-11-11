@@ -72,7 +72,7 @@ class JobRunner:
             logger.warning(f"Job '{job_name}' has no actions configured.")
             return {"job": job_name, "success": True, "actions_executed": 0}
 
-        playlist_service = PlaylistService(self.provider)
+        playlist_service = PlaylistService(self.provider, cfg=self.config)
         mix_service = MixService(self.provider)
         snapshot_service = SnapshotService(self.provider, cfg=self.config)
 

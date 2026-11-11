@@ -9,6 +9,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Union
 
+from curo.config import ConfigManager, config_manager
 from curo.core.models import Playlist, Track
 from curo.core.provider import MusicProvider
 from curo.services.metadata_serializer import serialize_playlist, serialize_track
@@ -19,8 +20,9 @@ logger = logging.getLogger(__name__)
 class PlaylistService:
     """Provides high-level playlist operations on top of an active MusicProvider."""
 
-    def __init__(self, provider: MusicProvider) -> None:
+    def __init__(self, provider: MusicProvider, cfg: Optional[ConfigManager] = None) -> None:
         self.provider = provider
+        self.config = cfg or getattr(provider, "config", None) or config_manager
 
     def list_playlists(self) -> List[Dict[str, Any]]:
         """Return list of user playlists with metadata."""
@@ -186,7 +188,7 @@ class PlaylistService:
         # Immediate snapshot of the backup playlist to keep it in sync on the same day without 24h lag
         try:
             from curo.services.snapshot_service import SnapshotService
-            snap_svc = SnapshotService(self.provider)
+            snap_svc = SnapshotService(self.provider, cfg=self.config)
             snap_svc.snapshot_playlist(identifier=target_playlist, alert_on_unavailable=False)
         except Exception as e:
             logger.debug(f"Could not take immediate snapshot for '{target_playlist}': {e}")
