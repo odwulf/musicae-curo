@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import yaml
@@ -179,6 +182,74 @@ class JobRunner:
                         create_if_missing=params.get("create_if_missing", True),
                         folder=folder,
                     )
+                elif action_type in ("webhook", "call_webhook", "http_webhook"):
+                    url = params.get("url")
+                    if not url:
+                        raise JobExecutionError("Webhook action requires 'url' parameter.")
+
+                    only_if_changed = bool(params.get("only_if_changed", False))
+                    if only_if_changed:
+                        # Check whether any previous action indicated changes
+                        has_changes = False
+                        for prev in action_results:
+                            prev_res = prev.get("result")
+                            if isinstance(prev_res, dict):
+                                # sync_mixes result check
+                                if prev_res.get("mixes_updated") or prev_res.get("megamixes_updated") or prev_res.get("discovery_backup"):
+                                    has_changes = True
+                                    break
+                                # playlist/snapshot/backup modification checks
+                                if prev_res.get("tracks_added", 0) > 0 or prev_res.get("has_changes") or prev_res.get("modified_playlists"):
+                                    has_changes = True
+                                    break
+                                if prev_res.get("status") == "updated" or prev_res.get("has_changed"):
+                                    has_changes = True
+                                    break
+
+                        if not has_changes:
+                            logger.info(f"Skipping webhook to {url}: only_if_changed=True and no previous actions detected changes.")
+                            res = {"skipped": True, "reason": "no_changes_detected", "url": url}
+                            action_results.append({"action": action_type, "status": "skipped", "result": res})
+                            continue
+
+                    method = str(params.get("method", "POST")).upper()
+                    headers = dict(params.get("headers", {}) or {})
+                    timeout = int(params.get("timeout", 15))
+
+                    last_res = action_results[-1].get("result") if action_results else {}
+                    custom_payload = params.get("payload") or params.get("data")
+                    if custom_payload is not None:
+                        body_data = custom_payload
+                    else:
+                        body_data = {
+                            "event": "curo_job_action",
+                            "job": job_name,
+                            "provider": self.provider.name,
+                            "last_action_result": last_res,
+                        }
+
+                    data_bytes = None
+                    if method in ("POST", "PUT", "PATCH"):
+                        if isinstance(body_data, (dict, list)):
+                            headers.setdefault("Content-Type", "application/json")
+                            data_bytes = json.dumps(body_data, default=str).encode("utf-8")
+                        elif isinstance(body_data, str):
+                            data_bytes = body_data.encode("utf-8")
+
+                    req = urllib.request.Request(url, data=data_bytes, headers=headers, method=method)
+                    try:
+                        with urllib.request.urlopen(req, timeout=timeout) as resp:
+                            resp_code = resp.getcode()
+                            resp_body = resp.read().decode("utf-8", errors="replace")
+                        logger.info(f"Webhook {method} {url} returned HTTP {resp_code}")
+                        res = {"success": True, "status_code": resp_code, "response": resp_body[:500], "url": url}
+                    except urllib.error.HTTPError as he:
+                        err_body = he.read().decode("utf-8", errors="replace") if hasattr(he, "read") else ""
+                        logger.warning(f"Webhook {method} {url} failed with HTTP {he.code}: {err_body[:200]}")
+                        res = {"success": False, "status_code": he.code, "reason": f"HTTP {he.code}: {he.reason}", "url": url}
+                    except Exception as we:
+                        logger.warning(f"Webhook {method} {url} failed: {we}")
+                        res = {"success": False, "reason": str(we), "url": url}
                 else:
                     raise JobExecutionError(f"Unknown action type: {action_type}")
 

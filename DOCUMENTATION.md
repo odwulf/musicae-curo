@@ -354,6 +354,7 @@ jobs:
 | `backup_favorites_to_playlist` | Mirrors all favorite/liked tracks into a designated regular playlist with full pagination. | - `target_playlist` (default: `"Favorites Backup"`)<br>- `mode` (`replace` or `append`, default: `replace`)<br>- `description` (optional description)<br>- `folder` (optional: destination folder name or ID) |
 | `export_playlist` | Exports a designated playlist to disk in the specified format. | - `playlist` (required: playlist title or ID)<br>- `format` (`json`, `m3u8`, or `csv`, default: `json`) |
 | `sync_playlist` | Synchronizes playlist tracks between providers or within the same provider (`mirror` or `append` modes). | - `source_playlist` (required: title or ID)<br>- `target_playlist` (optional: target title)<br>- `source_provider` (optional: provider name)<br>- `target_provider` (optional: target provider name)<br>- `mode` (`mirror` or `append`, default: `mirror`)<br>- `threshold` (percentage float, default: `80`)<br>- `dry_run` (bool, default: `false`)<br>- `create_if_missing` (bool, default: `true`)<br>- `folder` (optional: destination folder name or ID) |
+| `webhook` | Sends an HTTP request (e.g. to Home Assistant). Ideal for triggering automations when mixes refresh. | - `url` (required: endpoint URL)<br>- `method` (`POST`, `GET`, `PUT`, default: `POST`)<br>- `only_if_changed` (bool, default: `false`; only triggers if preceding actions detected changes)<br>- `payload` (dict/string JSON body)<br>- `headers` (dict of HTTP headers)<br>- `timeout` (seconds, default: 15) |
 
 ### Default Shipped Jobs
 
@@ -428,6 +429,45 @@ jobs:
         params:
           send_when_no_changes: false
           include_followers: true
+```
+
+### Webhook Notifications & Home Automation
+
+You can attach a `webhook` action to any job (such as `hourly-mix-sync`) to trigger Home Assistant automations, Node-RED flows, or external web services when updates happen:
+
+```yaml
+jobs:
+  hourly-mix-sync:
+    description: "Hourly check for mix updates: archives previous discovery mix and regenerates megamixes on change"
+    actions:
+      - action: sync_mixes
+        params:
+          folder: "Discovery Backups"
+          backup_discovery: true
+          update_megamixes: true
+
+      # Notify Home Assistant only when mixes actually changed
+      - action: webhook
+        params:
+          url: "http://homeassistant.local:8123/api/webhook/curo_mixes_updated"
+          method: "POST"
+          only_if_changed: true # Skips sending if no mixes changed
+          headers:
+            Content-Type: "application/json"
+          payload:
+            event: "mixes_updated"
+            provider: "tidal"
+```
+
+In Home Assistant, this can trigger an automation with a Webhook Trigger:
+```yaml
+automation:
+  - alias: "Refresh Tidal Mix AI Descriptions"
+    trigger:
+      - platform: webhook
+        webhook_id: "curo_mixes_updated"
+    action:
+      - service: script.refresh_music_mix_descriptions
 ```
 
 ### Scheduling with Linux `cron` or Task Scheduler

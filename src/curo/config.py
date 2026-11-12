@@ -26,6 +26,13 @@ jobs:
           folder: "Discovery Backups"
           backup_discovery: true
           update_megamixes: true
+      # Example Webhook to notify Home Assistant or external automations on change:
+      # - action: webhook
+      #   params:
+      #     url: "http://homeassistant.local:8123/api/webhook/curo_mixes_updated"
+      #     only_if_changed: true
+      #     payload:
+      #       event: "mixes_updated"
 
   daily-discovery-megamix:
     description: "Backup all daily mixes and build a randomized daily megamix"

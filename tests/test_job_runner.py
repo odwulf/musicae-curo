@@ -236,3 +236,77 @@ jobs:
             force=False,
             include_followers=True,
         )
+
+
+def test_job_runner_webhook_action_success_and_skipped(tmp_path: Path):
+    cfg = ConfigManager(custom_config_dir=tmp_path)
+    custom_yaml = """
+jobs:
+  test-webhook-changed:
+    actions:
+      - action: sync_mixes
+        params:
+          update_megamixes: true
+      - action: webhook
+        params:
+          url: "http://homeassistant.local:8123/api/webhook/curo_mixes"
+          method: "POST"
+          only_if_changed: true
+          payload:
+            event: "mixes_updated"
+
+  test-webhook-unchanged:
+    actions:
+      - action: sync_mixes
+        params:
+          update_megamixes: true
+      - action: webhook
+        params:
+          url: "http://homeassistant.local:8123/api/webhook/curo_mixes"
+          method: "POST"
+          only_if_changed: true
+"""
+    cfg.jobs_file.write_text(custom_yaml, encoding="utf-8")
+    mock_provider = MagicMock(spec=MusicProvider)
+    mock_provider.name = "tidal"
+    runner = JobRunner(provider=mock_provider, cfg=cfg)
+
+    with patch("curo.services.job_runner.MixService") as MockMixService, \
+         patch("urllib.request.urlopen") as mock_urlopen:
+
+        mock_mix_inst = MockMixService.return_value
+        # Case 1: mixes changed -> webhook called
+        mock_mix_inst.sync_mixes.return_value = {
+            "success": True,
+            "mixes_updated": ["daily_mix_1"],
+            "megamixes_updated": True,
+        }
+        mock_resp = MagicMock()
+        mock_resp.getcode.return_value = 200
+        mock_resp.read.return_value = b'{"status": "ok"}'
+        mock_urlopen.return_value.__enter__.return_value = mock_resp
+
+        res_changed = runner.run_job("test-webhook-changed")
+        assert res_changed["success"] is True
+        assert res_changed["actions_executed"] == 2
+        assert mock_urlopen.call_count == 1
+
+        req_call = mock_urlopen.call_args[0][0]
+        assert req_call.get_full_url() == "http://homeassistant.local:8123/api/webhook/curo_mixes"
+        assert req_call.get_method() == "POST"
+        assert req_call.data == b'{"event": "mixes_updated"}'
+
+        # Case 2: no mixes changed -> webhook skipped
+        mock_urlopen.reset_mock()
+        mock_mix_inst.sync_mixes.return_value = {
+            "success": True,
+            "mixes_updated": [],
+            "megamixes_updated": False,
+        }
+
+        res_unchanged = runner.run_job("test-webhook-unchanged")
+        assert res_unchanged["success"] is True
+        assert res_unchanged["actions_executed"] == 2
+        assert mock_urlopen.call_count == 0
+        assert res_unchanged["results"][1]["status"] == "skipped"
+        assert res_unchanged["results"][1]["result"]["reason"] == "no_changes_detected"
