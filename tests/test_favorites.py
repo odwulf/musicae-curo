@@ -76,8 +76,9 @@ def test_tidal_get_favorite_tracks_pagination(temp_config: ConfigManager):
     tracks = provider.get_favorite_tracks()
 
     assert len(tracks) == 135
-    assert tracks[0].id == "1"
-    assert tracks[134].id == "135"
+    # Since tracks are reversed (oldest first when querying DESC), the last track returned from page2 is at index 0
+    assert tracks[0].id == "135"
+    assert tracks[134].id == "1"
     assert session_mock.user.favorites.tracks.call_count == 3
     # Check that calls were made with limit and offset (and order params if passed)
     for c in session_mock.user.favorites.tracks.call_args_list:
@@ -109,8 +110,8 @@ def test_tidal_get_favorite_tracks_handles_short_page_filtering(temp_config: Con
     tracks = provider.get_favorite_tracks()
 
     assert len(tracks) == 127
-    assert tracks[0].id == "1"
-    assert tracks[-1].id == "127"
+    assert tracks[0].id == "127"
+    assert tracks[-1].id == "1"
     for c in session_mock.user.favorites.tracks.call_args_list:
         assert c.kwargs["limit"] == 100
     assert {c.kwargs["offset"] for c in session_mock.user.favorites.tracks.call_args_list} == {0, 100}

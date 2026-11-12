@@ -195,7 +195,7 @@ class TidalProvider(MusicProvider):
 
         try:
             order_param = getattr(tidalapi.user.ItemOrder, "Date", None) if hasattr(tidalapi, "user") and hasattr(tidalapi.user, "ItemOrder") else None
-            order_dir_param = getattr(tidalapi.user.OrderDirection, "Ascending", None) if hasattr(tidalapi, "user") and hasattr(tidalapi.user, "OrderDirection") else None
+            order_dir_param = getattr(tidalapi.user.OrderDirection, "Descending", None) if hasattr(tidalapi, "user") and hasattr(tidalapi.user, "OrderDirection") else None
         except Exception:
             order_param = None
             order_dir_param = None
@@ -228,6 +228,9 @@ class TidalProvider(MusicProvider):
         except Exception as e:
             logger.error(f"Error fetching Tidal favorite tracks at offset {offset}: {e}")
             raise
+
+        # Reverse tracks so they are ordered chronologically: oldest added first, newest added last
+        all_tracks.reverse()
         return all_tracks
 
     def add_favorite_track(self, track_id: str) -> bool:
