@@ -295,6 +295,7 @@ jobs:
         assert req_call.get_full_url() == "http://homeassistant.local:8123/api/webhook/curo_mixes"
         assert req_call.get_method() == "POST"
         assert req_call.data == b'{"event": "mixes_updated"}'
+        assert "Curo/1.0" in req_call.headers.get("User-agent", "")
 
         # Case 2: no mixes changed -> webhook skipped
         mock_urlopen.reset_mock()

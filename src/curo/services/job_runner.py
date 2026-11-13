@@ -214,6 +214,7 @@ class JobRunner:
 
                     method = str(params.get("method", "POST")).upper()
                     headers = dict(params.get("headers", {}) or {})
+                    headers.setdefault("User-Agent", "Curo/1.0 (Universal Music Library Custodian)")
                     timeout = int(params.get("timeout", 15))
 
                     last_res = action_results[-1].get("result") if action_results else {}
