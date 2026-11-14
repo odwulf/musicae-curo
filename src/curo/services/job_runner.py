@@ -96,12 +96,14 @@ class JobRunner:
                         folder=folder,
                         backup_discovery=params.get("backup_discovery", True),
                         update_megamixes=params.get("update_megamixes", True),
+                        ai_naming=params.get("ai_naming", True),
                     )
                 elif action_type == "backup_daily_discovery":
                     res = mix_service.backup_daily_discovery(
                         playlist_name_format=params.get("playlist_name_format", "Discovery Backup - {date}"),
                         description=params.get("description", f"Automated daily backup of {self.provider.display_name} Daily Discovery"),
                         folder=folder,
+                        ai_naming=params.get("ai_naming", True),
                     )
                 elif action_type == "create_megamix":
                     res = mix_service.create_megamix(

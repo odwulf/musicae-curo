@@ -123,6 +123,20 @@ class EmailConfig(BaseModel):
         return bool(self.smtp_host and self.to_address)
 
 
+class AIConfig(BaseModel):
+    """Configuration for AI thematic playlist and mix descriptions."""
+    enabled: bool = Field(default=False, description="Enable AI thematic analysis for discovery mixes and playlists")
+    provider: str = Field(default="gemini", description="AI provider (e.g. 'gemini', 'groq', 'openai')")
+    api_key: Optional[str] = Field(default=None, description="API key for AI provider")
+    model: str = Field(default="gemini-flash-lite-latest", description="Model identifier")
+    timeout: int = Field(default=20, description="HTTP request timeout in seconds")
+
+    @property
+    def is_configured(self) -> bool:
+        """Returns True if AI description is enabled and API key is present."""
+        return bool(self.enabled and self.api_key)
+
+
 class ConfigManager:
     """Manages paths, directory permissions, provider configurations, and settings."""
 
@@ -260,6 +274,30 @@ class ConfigManager:
         """Persist email configuration to config.json with secure file permissions."""
         data = self.load_raw_config()
         data["email"] = email_cfg.model_dump(exclude_none=True)
+        self.save_raw_config(data)
+
+    def get_ai_config(self) -> AIConfig:
+        """Load AI configuration from config.json and environment variables."""
+        raw = self.load_raw_config()
+        ai_dict: Dict[str, Any] = dict(raw.get("ai") or {})
+
+        if "CURO_AI_ENABLED" in os.environ:
+            ai_dict["enabled"] = os.environ["CURO_AI_ENABLED"].lower() in ("1", "true", "yes")
+        if "CURO_AI_PROVIDER" in os.environ:
+            ai_dict["provider"] = os.environ["CURO_AI_PROVIDER"]
+        if not ai_dict.get("api_key") and "GEMINI_API_KEY" in os.environ:
+            ai_dict["api_key"] = os.environ["GEMINI_API_KEY"]
+        if "CURO_AI_API_KEY" in os.environ:
+            ai_dict["api_key"] = os.environ["CURO_AI_API_KEY"]
+        if "CURO_AI_MODEL" in os.environ:
+            ai_dict["model"] = os.environ["CURO_AI_MODEL"]
+
+        return AIConfig(**ai_dict)
+
+    def save_ai_config(self, ai_cfg: AIConfig) -> None:
+        """Persist AI configuration to config.json with secure file permissions."""
+        data = self.load_raw_config()
+        data["ai"] = ai_cfg.model_dump(exclude_none=True)
         self.save_raw_config(data)
 
     def has_email_sent_before(self) -> bool:

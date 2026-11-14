@@ -424,6 +424,32 @@ class TidalProvider(MusicProvider):
         raw_pl = self.session.user.create_playlist(**kwargs)
         return self.to_domain_playlist(raw_pl)
 
+    def update_playlist_metadata(
+        self, playlist_id: str, title: Optional[str] = None, description: Optional[str] = None
+    ) -> bool:
+        raw_pl = self._get_raw_playlist(playlist_id)
+        if not raw_pl or not (isinstance(raw_pl, UserPlaylist) or _is_mock(raw_pl)):
+            logger.warning(f"User playlist not found or read-only: {playlist_id}")
+            return False
+
+        kwargs: Dict[str, Any] = {}
+        if title is not None:
+            kwargs["title"] = title
+        if description is not None:
+            kwargs["description"] = description
+
+        if not kwargs:
+            return True
+
+        try:
+            if hasattr(raw_pl, "edit"):
+                res = raw_pl.edit(**kwargs)
+                return bool(res) if res is not None else True
+            return False
+        except Exception as e:
+            logger.error(f"Failed to update playlist {playlist_id} metadata: {e}")
+            return False
+
     def add_tracks_to_playlist(
         self, playlist_id: str, track_ids: List[str], position: Optional[int] = None
     ) -> bool:

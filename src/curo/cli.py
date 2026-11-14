@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import logging
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional, Union
 
 import typer
@@ -869,6 +871,73 @@ def playlist_sync(
     console.print(f"Report exported to: [dim]{report['exported_to']}[/dim]\n")
 
 
+@playlist_app.command("describe")
+def playlist_describe(
+    identifier: str = typer.Argument(..., help="Playlist ID or exact title"),
+    apply: bool = typer.Option(False, "--apply", help="Update the playlist title and description on the streaming service"),
+    provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
+    json_mode: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    """Analyze a playlist's tracks using AI to generate a thematic title and description."""
+    if json_mode:
+        state["json_mode"] = True
+
+    p = get_active_provider(provider, require_active=True)
+    svc = PlaylistService(p, cfg=state["config"])
+    pl = svc.get_playlist(identifier)
+    if not pl:
+        err_console.print(f"[bold red]Playlist '{identifier}' not found on {p.display_name}.[/bold red]")
+        raise typer.Exit(1)
+
+    tracks = svc.get_tracks(identifier)
+    from curo.services.ai_describer import AIDescriber
+    describer = AIDescriber(cfg=state["config"])
+    if not describer.is_enabled():
+        err_console.print("[bold yellow]AI describer is not configured. Set 'api_key' under 'ai' in config.json or set GEMINI_API_KEY.[/bold yellow]")
+        raise typer.Exit(1)
+
+    res = describer.describe_tracks(tracks)
+    if not res:
+        err_console.print("[bold red]AI description generation failed.[/bold red]")
+        raise typer.Exit(1)
+
+    orig_title = str(getattr(pl, "title", identifier))
+    date_match = re.match(r"^(\d{4}-\d{2}-\d{2}):?", orig_title)
+
+    final_title = f"{date_match.group(1)}: {res.theme_title}" if date_match else res.theme_title
+    final_desc = res.description
+    if not date_match and "discovery" not in orig_title.lower():
+        final_desc = re.sub(r"^Discovery mix backup:\s*", "", final_desc)
+
+    data = {
+        "playlist_id": str(getattr(pl, "id", identifier)),
+        "original_title": orig_title,
+        "theme_title": res.theme_title,
+        "suggested_title": final_title,
+        "description": final_desc,
+        "track_count": len(tracks),
+        "applied": False,
+    }
+
+    if apply:
+        success = svc.update_playlist_metadata(
+            identifier=str(getattr(pl, "id", identifier)),
+            title=final_title,
+            description=final_desc,
+        )
+        data["applied"] = success
+        if not success:
+            err_console.print(f"[bold red]Failed to apply metadata updates on {p.display_name}.[/bold red]")
+            raise typer.Exit(1)
+
+    if state["json_mode"]:
+        console.print_json(data=data)
+    else:
+        panel_content = f"[bold cyan]Suggested Title:[/bold cyan] {data['suggested_title']}\n\n[bold cyan]Description:[/bold cyan] {data['description']}"
+        applied_msg = " (Applied)" if data["applied"] else ""
+        console.print(Panel(panel_content, title=f"AI Playlist Analysis: {data['original_title']}{applied_msg}", border_style="green"))
+
+
 # ---------------------------------------------------------------------------
 # Album Commands
 # ---------------------------------------------------------------------------
@@ -947,10 +1016,55 @@ def mix_list(
     console.print(table)
 
 
+@mix_app.command("describe")
+def mix_describe(
+    provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
+    json_mode: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
+) -> None:
+    """Analyze today's Daily Discovery mix and display an AI thematic title and description."""
+    if json_mode:
+        state["json_mode"] = True
+
+    p = get_active_provider(provider, require_active=True)
+    svc = MixService(p, cfg=state["config"])
+    disc, _ = svc.get_categorized_daily_mixes()
+    if not disc:
+        err_console.print(f"[bold red]Could not find Daily Discovery on {p.display_name}.[/bold red]")
+        raise typer.Exit(1)
+
+    tracks = p.get_mix_tracks(str(disc.id))
+    from curo.services.ai_describer import AIDescriber
+    describer = AIDescriber(cfg=state["config"])
+    if not describer.is_enabled():
+        err_console.print("[bold yellow]AI describer is not configured. Set 'api_key' under 'ai' in config.json or set GEMINI_API_KEY.[/bold yellow]")
+        raise typer.Exit(1)
+
+    res = describer.describe_tracks(tracks)
+    if not res:
+        err_console.print("[bold red]AI description generation failed.[/bold red]")
+        raise typer.Exit(1)
+
+    today_str = datetime.date.today().isoformat()
+    data = {
+        "date": today_str,
+        "theme_title": res.theme_title,
+        "full_title": f"{today_str}: {res.theme_title}",
+        "description": res.description,
+        "track_count": len(tracks),
+    }
+
+    if state["json_mode"]:
+        console.print_json(data=data)
+    else:
+        panel_content = f"[bold cyan]Title:[/bold cyan] {data['full_title']}\n\n[bold cyan]Description:[/bold cyan] {data['description']}"
+        console.print(Panel(panel_content, title=f"AI Thematic Analysis: {p.display_name} Daily Discovery", border_style="green"))
+
+
 @mix_app.command("daily")
 def mix_daily(
     format: str = typer.Option("Discovery Backup - {date}", "--format", help="Playlist name template"),
     folder: Optional[str] = typer.Option(None, "--folder", "-f", help="Target playlist folder name or ID"),
+    ai: bool = typer.Option(True, "--ai/--no-ai", help="Use AI thematic naming for discovery mix backup"),
     provider: Optional[str] = typer.Option(None, "-p", "--provider", help="Target streaming provider"),
     quiet: bool = typer.Option(False, "-q", "--quiet", help="Suppress console output (ideal for cron)."),
     json_mode: bool = typer.Option(False, "--json", help="Output machine-readable JSON."),
@@ -962,8 +1076,8 @@ def mix_daily(
         state["json_mode"] = True
 
     p = get_active_provider(provider, require_active=True)
-    svc = MixService(p)
-    res = svc.backup_daily_discovery(playlist_name_format=format, folder=folder)
+    svc = MixService(p, cfg=state["config"])
+    res = svc.backup_daily_discovery(playlist_name_format=format, folder=folder, ai_naming=ai)
     if state["json_mode"]:
         console.print_json(data=res)
     elif not state["quiet"]:

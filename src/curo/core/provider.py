@@ -88,6 +88,12 @@ class MusicProvider(ABC):
         """
         ...
 
+    def update_playlist_metadata(
+        self, playlist_id: str, title: Optional[str] = None, description: Optional[str] = None
+    ) -> bool:
+        """Update a playlist's title and/or description on the streaming service."""
+        return False
+
     def get_folders(self) -> List[Dict[str, Any]]:
         """Fetch all playlist folders owned by the authenticated user."""
         return []

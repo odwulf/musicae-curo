@@ -85,6 +85,17 @@ class PlaylistService:
         """Move a playlist into a folder."""
         return self.provider.move_playlist_to_folder(playlist_id, folder)
 
+    def update_playlist_metadata(
+        self, identifier: str, title: Optional[str] = None, description: Optional[str] = None
+    ) -> bool:
+        """Update a playlist's title and/or description on the music provider."""
+        playlist = self.get_playlist(identifier)
+        if not playlist:
+            logger.warning(f"Playlist '{identifier}' not found.")
+            return False
+        pl_id = str(getattr(playlist, "id", identifier))
+        return self.provider.update_playlist_metadata(pl_id, title=title, description=description)
+
     def get_folders(self) -> List[Dict[str, Any]]:
         """Fetch all playlist folders owned by the authenticated user."""
         return self.provider.get_folders()

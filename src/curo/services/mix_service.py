@@ -12,7 +12,7 @@ import re
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from curo.config import ConfigManager, config_manager
-from curo.core.models import CuratedMix, Track
+from curo.core.models import Album, Artist, CuratedMix, Track
 from curo.core.provider import MusicProvider
 from curo.services.playlist_service import PlaylistService
 
@@ -43,7 +43,8 @@ class MixService:
     ) -> None:
         self.provider = provider
         self.config = cfg or config_manager
-        self.playlist_service = PlaylistService(provider)
+        self.cfg = self.config
+        self.playlist_service = PlaylistService(provider, cfg=self.config)
         self.history_file = self.config.megamix_history_file
         self.mixes_dir = self.config.mixes_dir
 
@@ -189,10 +190,12 @@ class MixService:
         playlist_name_format: str = "Discovery Backup - {date}",
         description: str = "Automated daily backup of Daily Discovery",
         folder: Optional[str] = None,
+        ai_naming: bool = True,
     ) -> Dict[str, Any]:
         """Archive today's Daily Discovery mix into a permanent dated playlist."""
         today_str = datetime.date.today().isoformat()
         playlist_name = playlist_name_format.format(date=today_str)
+        final_description = f"{description} (archived on {today_str})"
 
         discovery_mix, _ = self.get_categorized_daily_mixes()
         if not discovery_mix:
@@ -214,9 +217,22 @@ class MixService:
                 res["folder"] = folder
             return res
 
+        if ai_naming:
+            try:
+                from curo.services.ai_describer import AIDescriber
+                describer = AIDescriber(cfg=self.cfg)
+                if describer.is_enabled():
+                    ai_meta = describer.describe_tracks(tracks=tracks, date_str=today_str)
+                    if ai_meta:
+                        playlist_name = f"{today_str}: {ai_meta.theme_title}"
+                        final_description = ai_meta.description
+                        logger.info(f"AI generated title and description for Daily Discovery: '{playlist_name}'")
+            except Exception as e:
+                logger.warning(f"AI description generation failed: {e}. Falling back to default naming.")
+
         playlist = self.playlist_service.get_or_create_playlist(
             title=playlist_name,
-            description=f"{description} (archived on {today_str})",
+            description=final_description,
             public=False,
             folder=folder,
         )
@@ -476,6 +492,7 @@ class MixService:
         folder: Optional[str] = "Discovery Backups",
         backup_discovery: bool = True,
         update_megamixes: bool = True,
+        ai_naming: bool = True,
     ) -> Dict[str, Any]:
         """Detect updates to Daily Discovery and Daily Mixes.
 
@@ -544,10 +561,34 @@ class MixService:
                     preceding_track_ids = [str(t["id"]) for t in preceding_tracks if t.get("id")]
                     if preceding_track_ids:
                         backup_playlist_name = f"Discovery Backup - {preceding_date}"
+                        backup_description = f"Automated backup of Daily Discovery for period {preceding_date}"
+
+                        if ai_naming:
+                            try:
+                                from curo.services.ai_describer import AIDescriber
+                                describer = AIDescriber(cfg=self.cfg)
+                                if describer.is_enabled():
+                                    rec_tracks = [
+                                        Track(
+                                            id=str(t.get("id")),
+                                            title=t.get("title", "Unknown"),
+                                            artist=Artist(id=str(t.get("artist_id", t.get("id"))), name=t.get("artist_name", "Unknown")),
+                                            album=Album(id=str(t.get("album_id", t.get("id"))), title=t.get("album_title", "")) if t.get("album_title") else None,
+                                        )
+                                        for t in preceding_tracks if t.get("id")
+                                    ]
+                                    ai_meta = describer.describe_tracks(tracks=rec_tracks, date_str=preceding_date)
+                                    if ai_meta:
+                                        backup_playlist_name = f"{preceding_date}: {ai_meta.theme_title}"
+                                        backup_description = ai_meta.description
+                                        logger.info(f"AI generated title and description for preceding Daily Discovery: '{backup_playlist_name}'")
+                            except Exception as e:
+                                logger.warning(f"AI description generation failed for preceding mix: {e}. Falling back to default.")
+
                         logger.info(f"Archiving preceding Daily Discovery into '{backup_playlist_name}' ({len(preceding_track_ids)} tracks)")
                         pl = self.playlist_service.get_or_create_playlist(
                             title=backup_playlist_name,
-                            description=f"Automated backup of Daily Discovery for period {preceding_date}",
+                            description=backup_description,
                             public=False,
                             folder=folder,
                         )
